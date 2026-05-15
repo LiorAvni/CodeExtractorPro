@@ -447,8 +447,8 @@ function App() {
   const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
   return <main>
     <div className="top-actions">
-      <button className="merge-nav-button" onClick={() => window.open('/merge.html', '_blank', 'noopener,noreferrer')} title="Open DOCX/PDF Merger in a new tab">
-        <ExternalLink size={17}/> DOCX/PDF Merger
+      <button className="merge-nav-button" onClick={() => window.open('/merge.html', '_blank', 'noopener,noreferrer')} title="Open PDF Merger in a new tab">
+        <ExternalLink size={17}/> PDF Merger
       </button>
       <button className="theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
         {theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}
