@@ -13,7 +13,7 @@ import json from 'highlight.js/lib/languages/json';
 import bash from 'highlight.js/lib/languages/bash';
 import plaintext from 'highlight.js/lib/languages/plaintext';
 import { Document, Packer, Paragraph, TextRun, PageOrientation, AlignmentType } from 'docx';
-import { Archive, Copy, Download, FileCode2, FileText, Folder, FolderOpen, Trash2, UploadCloud, X } from 'lucide-react';
+import { Archive, ChevronDown, ChevronRight, Copy, Download, FileCode2, FileText, Folder, FolderOpen, Trash2, UploadCloud, X } from 'lucide-react';
 import './styles.css';
 
 hljs.registerLanguage('csharp', csharp);
@@ -48,9 +48,7 @@ const TYPE_COLORS = {
   property: 'FF0000', function: '795E26', class: '2B91AF', default: '000000'
 };
 
-function normalizePath(path) {
-  return path.replace(/\\/g, '/').replace(/^\/+/, '');
-}
+function normalizePath(path) { return path.replace(/\\/g, '/').replace(/^\/+/, ''); }
 function getFileName(path) { return normalizePath(path).split('/').filter(Boolean).pop() || ''; }
 function getExt(path) {
   const name = getFileName(path).toLowerCase();
@@ -59,17 +57,13 @@ function getExt(path) {
   const dot = name.lastIndexOf('.');
   return dot >= 0 ? name.slice(dot) : '';
 }
-function isIgnoredPath(path) {
-  return normalizePath(path).split('/').some(part => IGNORE_PARTS.has(part));
-}
+function isIgnoredPath(path) { return normalizePath(path).split('/').some(part => IGNORE_PARTS.has(part)); }
 function shouldOutput(path) {
   const name = getFileName(path).toLowerCase();
   const ext = getExt(path);
   return SPECIAL_FILENAMES.has(name) || OUTPUT_EXTENSIONS.has(ext) || ext === '.makefile' || ext === '.dockerfile';
 }
-function shouldReadAsContext(path) {
-  return CONTEXT_EXTENSIONS.has(getExt(path));
-}
+function shouldReadAsContext(path) { return CONTEXT_EXTENSIONS.has(getExt(path)); }
 function depthOf(path) { return normalizePath(path).split('/').filter(Boolean).length; }
 function safeBaseName(name) { return name.replace(/\.zip$/i, '').replace(/[^a-z0-9._-]+/gi, '_') || 'code-extract'; }
 function indent(level) { return '  '.repeat(level); }
@@ -95,9 +89,8 @@ function detectProjectType(path, content) {
   const ext = getExt(path);
   const lower = content.toLowerCase();
   if (ext === '.sln') return 'solution';
-  const sdk = (content.match(/<Project[^>]*Sdk=["']([^"']+)["']/i) || [])[1] || '';
   const outputType = xmlTag(content, 'OutputType').toLowerCase();
-  const targetFramework = xmlTag(content, 'TargetFramework') || xmlTag(content, 'TargetFrameworks');
+  const targetFramework = xmlTag(content, 'TargetFramework') || xmlTag(content, 'TargetFrameworks') || xmlTag(content, 'TargetFrameworkVersion');
   const useWpf = xmlTag(content, 'UseWPF').toLowerCase() === 'true' || lower.includes('<usewpf>true</usewpf>');
   const useMaui = xmlTag(content, 'UseMaui').toLowerCase() === 'true' || lower.includes('<usemaui>true</usemaui>');
   const useWinForms = xmlTag(content, 'UseWindowsForms').toLowerCase() === 'true';
@@ -151,19 +144,41 @@ function makeDocxRunsFromLine(lineTokens) {
   if (!lineTokens.length) return [new TextRun({ text: ' ', size: 14, font: 'Consolas' })];
   return lineTokens.map(t => new TextRun({ text: t.text.replace(/\t/g, '    '), color: t.color, size: 14, font: 'Consolas' }));
 }
+function newNode(name, type) {
+  return { name, type, children: {}, sortedChildren: [], file: null, label: '', id: crypto.randomUUID() };
+}
 function insertTreePath(root, filePath, fileObj) {
   const parts = normalizePath(filePath).split('/').filter(Boolean);
   let node = root;
   parts.forEach((part, index) => {
     const isFile = index === parts.length - 1;
-    if (!node.children[part]) node.children[part] = { name: part, type: isFile ? 'file' : 'folder', children: {}, file: null, label: '' };
+    if (!node.children[part]) node.children[part] = newNode(part, isFile ? 'file' : 'folder');
     if (isFile) node.children[part].file = fileObj;
     node = node.children[part];
   });
 }
+function groupCodeBehindFiles(node) {
+  if (!node.children) return;
+  for (const child of Object.values(node.children)) groupCodeBehindFiles(child);
+  const names = Object.keys(node.children);
+  for (const name of names) {
+    const lower = name.toLowerCase();
+    if (!lower.endsWith('.xaml') && !lower.endsWith('.razor')) continue;
+    const codeBehindName = `${name}.cs`;
+    const primary = node.children[name];
+    const codeBehind = node.children[codeBehindName];
+    if (!primary || !codeBehind || primary.type !== 'file' || codeBehind.type !== 'file') continue;
+    primary.type = 'fileGroup';
+    primary.children = primary.children || {};
+    primary.children[codeBehindName] = codeBehind;
+    delete node.children[codeBehindName];
+  }
+}
 function sortTree(node) {
   const sorted = Object.values(node.children || {}).sort((a, b) => {
-    if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+    const aFolderish = a.type === 'folder';
+    const bFolderish = b.type === 'folder';
+    if (aFolderish !== bFolderish) return aFolderish ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
   node.sortedChildren = sorted;
@@ -181,27 +196,88 @@ function applyProjectLabels(tree, projectMap) {
   }
   Object.values(tree.children).forEach(child => walk(child, ''));
 }
-function buildOutput(tree, rootName) {
+function collectFilePaths(node) {
+  const paths = [];
+  if ((node.type === 'file' || node.type === 'fileGroup') && node.file) paths.push(node.file.path);
+  node.sortedChildren?.forEach(child => paths.push(...collectFilePaths(child)));
+  return paths;
+}
+function getSelectionState(node, selectedPaths) {
+  const paths = collectFilePaths(node);
+  if (!paths.length) return 'none';
+  const selectedCount = paths.filter(path => selectedPaths.has(path)).length;
+  if (selectedCount === 0) return 'none';
+  if (selectedCount === paths.length) return 'all';
+  return 'partial';
+}
+function buildSelectedOutput(tree, rootName, selectedPaths) {
   const lines = [`${rootName} (${tree.solutionLabel || 'zip project'}):`];
   const filesForDocx = [];
   function walk(node, level, path) {
-    const suffix = node.type === 'folder' ? ` (${node.label || 'folder'}):` : ':';
+    const hasSelectedDescendant = collectFilePaths(node).some(p => selectedPaths.has(p));
+    if (!hasSelectedDescendant) return;
+    const isFolderish = node.type === 'folder' || node.type === 'fileGroup';
+    const suffix = isFolderish ? ` (${node.label || (node.type === 'folder' ? 'folder' : 'code-behind group')}):` : ':';
     lines.push(`${indent(level)}${node.name}${suffix}`);
-    if (node.type === 'file' && node.file) {
+    if ((node.type === 'file' || node.type === 'fileGroup') && node.file && selectedPaths.has(node.file.path)) {
       lines.push(`${indent(level + 1)}~~~`);
       lines.push(node.file.content.replace(/\t/g, '    '));
       lines.push(`${indent(level + 1)}~~~`);
       filesForDocx.push({ ...node.file, displayPath: path });
     }
-    if (node.sortedChildren) node.sortedChildren.forEach(child => walk(child, level + 1, `${path}/${child.name}`));
+    node.sortedChildren?.forEach(child => walk(child, level + 1, `${path}/${child.name}`));
   }
   tree.sortedChildren.forEach(child => walk(child, 1, child.name));
   return { text: lines.join('\n'), filesForDocx };
 }
+function countSelected(result) {
+  return result.allFilePaths.filter(path => result.selectedPaths.has(path)).length;
+}
+function downloadBlob(text, filename, type = 'text/plain;charset=utf-8') { saveAs(new Blob([text], { type }), filename); }
+async function copyText(text) { await navigator.clipboard.writeText(text); }
+async function downloadDocx(result, output) {
+  const paragraphs = [];
+  const para = (children) => new Paragraph({ alignment: AlignmentType.LEFT, bidirectional: false, children });
+  paragraphs.push(para([new TextRun({ text: `${result.rootName} (${result.tree.solutionLabel || 'zip project'}):`, bold: true, size: 14, font: 'Consolas' })]));
+  let count = 1;
+  function addPlain(line, bold = false) {
+    if (count++ > MAX_DOCX_PARAGRAPHS) return;
+    paragraphs.push(para([new TextRun({ text: line || ' ', bold, size: 14, font: 'Consolas', color: '000000' })]));
+  }
+  function walk(node, level, path) {
+    if (count > MAX_DOCX_PARAGRAPHS) return;
+    const hasSelectedDescendant = collectFilePaths(node).some(p => result.selectedPaths.has(p));
+    if (!hasSelectedDescendant) return;
+    const isFolderish = node.type === 'folder' || node.type === 'fileGroup';
+    addPlain(`${indent(level)}${node.name}${isFolderish ? ` (${node.label || (node.type === 'folder' ? 'folder' : 'code-behind group')}):` : ':'}`, isFolderish);
+    if ((node.type === 'file' || node.type === 'fileGroup') && node.file && result.selectedPaths.has(node.file.path)) {
+      addPlain(`${indent(level + 1)}~~~`);
+      const prefix = indent(level + 1);
+      const codeLines = tokensToLines(highlightedTokens(node.file.content, node.file.language));
+      for (const line of codeLines) {
+        if (count++ > MAX_DOCX_PARAGRAPHS) break;
+        paragraphs.push(para([new TextRun({ text: prefix, size: 14, font: 'Consolas' }), ...makeDocxRunsFromLine(line)]));
+      }
+      addPlain(`${indent(level + 1)}~~~`);
+    }
+    node.sortedChildren?.forEach(child => walk(child, level + 1, `${path}/${child.name}`));
+  }
+  result.tree.sortedChildren.forEach(child => walk(child, 1, child.name));
+  if (count > MAX_DOCX_PARAGRAPHS) addPlain('[DOCX truncated to keep Word stable. Use TXT for the full extraction.]');
+  const doc = new Document({
+    sections: [{
+      properties: { page: { size: { orientation: PageOrientation.LANDSCAPE }, margin: { top: 360, right: 360, bottom: 360, left: 360 } } },
+      children: paragraphs
+    }]
+  });
+  const blob = await Packer.toBlob(doc);
+  saveAs(blob, `${safeBaseName(result.name)}.docx`);
+}
 async function parseZip(file) {
   const zip = await JSZip.loadAsync(file);
   const rootName = safeBaseName(file.name);
-  const tree = { name: rootName, type: 'folder', children: {}, sortedChildren: [], label: '', solutionLabel: 'zip project' };
+  const tree = newNode(rootName, 'folder');
+  tree.solutionLabel = 'zip project';
   const projectMap = {};
   const outputFiles = [];
   const entries = Object.values(zip.files).filter(e => !e.dir && !isIgnoredPath(e.name));
@@ -224,87 +300,77 @@ async function parseZip(file) {
     insertTreePath(tree, path, fileObj);
   }
   applyProjectLabels(tree, projectMap);
+  groupCodeBehindFiles(tree);
   sortTree(tree);
-  const output = buildOutput(tree, rootName);
-  return { id: crypto.randomUUID(), name: file.name, rootName, tree, fileCount: outputFiles.length, outputText: output.text, filesForDocx: output.filesForDocx, createdAt: new Date().toLocaleString() };
+  const allFilePaths = outputFiles.map(f => f.path);
+  const selectedPaths = new Set(allFilePaths);
+  const output = buildSelectedOutput(tree, rootName, selectedPaths);
+  return { id: crypto.randomUUID(), name: file.name, rootName, tree, fileCount: outputFiles.length, allFilePaths, selectedPaths, outputText: output.text, filesForDocx: output.filesForDocx, createdAt: new Date().toLocaleString() };
 }
-function downloadBlob(text, filename, type = 'text/plain;charset=utf-8') {
-  saveAs(new Blob([text], { type }), filename);
+function TriStateBox({ state, onClick }) {
+  return <button
+    className={`checkbox ${state}`}
+    onClick={e => { e.stopPropagation(); onClick(); }}
+    aria-label="Toggle selection"
+    title="Toggle selection"
+  >{state === 'all' ? '✓' : state === 'partial' ? '—' : ''}</button>;
 }
-async function copyText(text) {
-  await navigator.clipboard.writeText(text);
-}
-async function downloadDocx(result) {
-  const paragraphs = [];
-  paragraphs.push(new Paragraph({ children: [new TextRun({ text: `${result.rootName} (${result.tree.solutionLabel || 'zip project'}):`, bold: true, size: 14, font: 'Consolas' })] }));
-  let count = 1;
-  function addPlain(line, bold = false) {
-    if (count++ > MAX_DOCX_PARAGRAPHS) return;
-    paragraphs.push(new Paragraph({ children: [new TextRun({ text: line || ' ', bold, size: 14, font: 'Consolas', color: '000000' })] }));
-  }
-  function walk(node, level, path) {
-    if (count > MAX_DOCX_PARAGRAPHS) return;
-    addPlain(`${indent(level)}${node.name}${node.type === 'folder' ? ` (${node.label || 'folder'}):` : ':'}`, node.type === 'folder');
-    if (node.type === 'file' && node.file) {
-      addPlain(`${indent(level + 1)}~~~`);
-      const prefix = indent(level + 1);
-      const codeLines = tokensToLines(highlightedTokens(node.file.content, node.file.language));
-      for (const line of codeLines) {
-        if (count++ > MAX_DOCX_PARAGRAPHS) break;
-        paragraphs.push(new Paragraph({
-          children: [new TextRun({ text: prefix, size: 14, font: 'Consolas' }), ...makeDocxRunsFromLine(line)]
-        }));
-      }
-      addPlain(`${indent(level + 1)}~~~`);
-    }
-    node.sortedChildren?.forEach(child => walk(child, level + 1, `${path}/${child.name}`));
-  }
-  result.tree.sortedChildren.forEach(child => walk(child, 1, child.name));
-  if (count > MAX_DOCX_PARAGRAPHS) addPlain('[DOCX truncated to keep Word stable. Use TXT for the full extraction.]');
-  const doc = new Document({
-    sections: [{
-      properties: { page: { size: { orientation: PageOrientation.LANDSCAPE }, margin: { top: 360, right: 360, bottom: 360, left: 360 } } },
-      children: paragraphs
-    }]
-  });
-  const blob = await Packer.toBlob(doc);
-  saveAs(blob, `${safeBaseName(result.name)}.docx`);
-}
-function TreeNode({ node, depth = 0 }) {
+function TreeNode({ node, depth = 0, selectedPaths, setSelectedPaths }) {
   const [open, setOpen] = useState(true);
-  const isFolder = node.type === 'folder';
+  const isExpandable = (node.type === 'folder' || node.type === 'fileGroup') && node.sortedChildren?.length > 0;
+  const isFolderish = node.type === 'folder' || node.type === 'fileGroup';
+  const selectionState = getSelectionState(node, selectedPaths);
+  const toggleSelected = () => {
+    const paths = collectFilePaths(node);
+    setSelectedPaths(prev => {
+      const next = new Set(prev);
+      const shouldSelect = getSelectionState(node, prev) !== 'all';
+      paths.forEach(path => shouldSelect ? next.add(path) : next.delete(path));
+      return next;
+    });
+  };
   return <div>
-    <button className="tree-row" style={{ paddingLeft: 8 + depth * 14 }} onClick={() => isFolder && setOpen(!open)} title={node.name}>
-      {isFolder ? (open ? <FolderOpen size={15}/> : <Folder size={15}/>) : <FileCode2 size={15}/>}<span>{node.name}</span>{node.label && <em>{node.label}</em>}
-    </button>
-    {isFolder && open && node.sortedChildren?.map(child => <TreeNode key={child.name} node={child} depth={depth + 1} />)}
+    <div className="tree-row" style={{ paddingLeft: 8 + depth * 16 }} title={node.name} onClick={() => isExpandable && setOpen(!open)}>
+      <span className="chevron">{isExpandable ? (open ? <ChevronDown size={14}/> : <ChevronRight size={14}/>) : <span className="chevron-spacer" />}</span>
+      <TriStateBox state={selectionState} onClick={toggleSelected} />
+      <span className="node-icon">{isFolderish ? (open ? <FolderOpen size={15}/> : <Folder size={15}/>) : <FileCode2 size={15}/>}</span>
+      <span className="node-name">{node.name}</span>{node.label && <em>{node.label}</em>}
+    </div>
+    {isExpandable && open && node.sortedChildren?.map(child => <TreeNode key={child.name} node={child} depth={depth + 1} selectedPaths={selectedPaths} setSelectedPaths={setSelectedPaths} />)}
   </div>;
 }
-function ResultBlock({ result, onDelete }) {
-  const [leftWidth, setLeftWidth] = useState(300);
+function ResultBlock({ result, onDelete, onSelectionChange }) {
+  const [leftWidth, setLeftWidth] = useState(320);
   const [copied, setCopied] = useState(false);
   const dragging = useRef(false);
+  const selectedCount = countSelected(result);
+  const selectedOutput = useMemo(() => buildSelectedOutput(result.tree, result.rootName, result.selectedPaths), [result.tree, result.rootName, result.selectedPaths]);
+  const setSelectedPaths = updater => onSelectionChange(result.id, updater);
   const startDrag = e => { dragging.current = true; e.preventDefault(); };
   React.useEffect(() => {
-    const move = e => { if (dragging.current) setLeftWidth(Math.min(560, Math.max(170, e.clientX - 28))); };
+    const move = e => { if (dragging.current) setLeftWidth(Math.min(620, Math.max(210, e.clientX - 28))); };
     const up = () => { dragging.current = false; };
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
   }, []);
+  const selectAll = () => onSelectionChange(result.id, () => new Set(result.allFilePaths));
   return <section className="result-card">
     <header className="result-header">
-      <div className="title-wrap"><Archive size={20}/><div><h2>{result.name}</h2><p>{result.fileCount} output files • {result.createdAt}</p></div></div>
+      <div className="title-wrap"><Archive size={20}/><div><h2>{result.name}</h2><p>{selectedCount} out of {result.fileCount} files selected • {result.createdAt}</p></div></div>
       <div className="actions">
-        <button onClick={async () => { await copyText(result.outputText); setCopied(true); setTimeout(() => setCopied(false), 1400); }}><Copy size={16}/>{copied ? 'Copied' : 'Copy text'}</button>
-        <button onClick={() => downloadBlob(result.outputText, `${safeBaseName(result.name)}.txt`)}><FileText size={16}/>TXT</button>
-        <button onClick={() => downloadDocx(result)}><Download size={16}/>DOCX</button>
+        <button onClick={async () => { await copyText(selectedOutput.text); setCopied(true); setTimeout(() => setCopied(false), 1400); }}><Copy size={16}/>{copied ? 'Copied' : 'Copy text'}</button>
+        <button onClick={() => downloadBlob(selectedOutput.text, `${safeBaseName(result.name)}.txt`)}><FileText size={16}/>TXT</button>
+        <button onClick={() => downloadDocx(result, selectedOutput)}><Download size={16}/>DOCX</button>
         <button className="danger" onClick={() => onDelete(result.id)}><Trash2 size={16}/>Delete</button>
       </div>
     </header>
     <div className="workspace">
-      <aside className="explorer" style={{ width: leftWidth }}><div className="explorer-title">Solution Explorer</div><TreeNode node={result.tree} /></aside>
+      <aside className="explorer" style={{ width: leftWidth }}>
+        <div className="explorer-title"><span>File Explorer</span><button onClick={selectAll}>Select All</button></div>
+        <TreeNode node={result.tree} selectedPaths={result.selectedPaths} setSelectedPaths={setSelectedPaths} />
+      </aside>
       <div className="resizer" onMouseDown={startDrag} title="Drag to resize" />
-      <pre className="output"><code>{result.outputText}</code></pre>
+      <pre className="output"><code>{selectedOutput.text}</code></pre>
     </div>
   </section>;
 }
@@ -327,9 +393,16 @@ function App() {
       setError('Could not parse one of the ZIP files. Make sure it is a valid project ZIP and not password-protected.');
     } finally { setBusy(false); }
   }
+  const updateSelection = (id, updater) => {
+    setResults(prev => prev.map(item => {
+      if (item.id !== id) return item;
+      const selectedPaths = typeof updater === 'function' ? updater(item.selectedPaths) : updater;
+      return { ...item, selectedPaths };
+    }));
+  };
   return <main>
     <section className="hero">
-      <div><p className="eyebrow">CodeExtractor Pro</p><h1>Turn project ZIPs into clean AI-ready code text.</h1><p className="subtitle">Multiple ZIPs, solution-style structure, TXT export, and DOCX export with syntax-colored code at 7pt.</p></div>
+      <div><p className="eyebrow">CodeExtractor Pro</p><h1>Turn code project ZIPs into clean text.</h1><p className="subtitle">Multiple ZIPs, solution-style structure, selectable files, TXT export, and DOCX export with syntax-colored code at 7pt.</p></div>
       <div className="stats"><strong>{results.length}</strong><span>ZIPs loaded</span><strong>{totalFiles}</strong><span>files extracted</span></div>
     </section>
     <section className="dropzone" onDrop={e => { e.preventDefault(); handleFiles(e.dataTransfer.files); }} onDragOver={e => e.preventDefault()} onClick={() => inputRef.current?.click()}>
@@ -337,7 +410,7 @@ function App() {
       <input ref={inputRef} type="file" accept=".zip" multiple onChange={e => handleFiles(e.target.files)} />
     </section>
     {error && <div className="error"><X size={16}/>{error}</div>}
-    <section className="results">{results.map(r => <ResultBlock key={r.id} result={r} onDelete={id => setResults(prev => prev.filter(x => x.id !== id))} />)}</section>
+    <section className="results">{results.map(r => <ResultBlock key={r.id} result={r} onDelete={id => setResults(prev => prev.filter(x => x.id !== id))} onSelectionChange={updateSelection} />)}</section>
   </main>;
 }
 
