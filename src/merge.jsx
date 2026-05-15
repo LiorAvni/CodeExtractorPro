@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { saveAs } from 'file-saver';
 import { PDFDocument } from 'pdf-lib';
-import { ArrowDown, ArrowLeft, ArrowUp, FileText, Merge, Moon, Plus, Sun, Trash2, UploadCloud } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowUp, FileText, HelpCircle, Merge, Moon, Plus, Sun, Trash2, UploadCloud, X } from 'lucide-react';
 import './styles.css';
 
 const PDF_MIME = 'application/pdf';
@@ -40,6 +40,35 @@ async function mergePdfFiles(files) {
   return new Blob([bytes], { type: PDF_MIME });
 }
 
+
+function GuidePanel({ open, onClose }) {
+  return <aside className={`guide-panel ${open ? 'open' : ''}`} aria-hidden={!open}>
+    <div className="guide-head"><strong>PDF Merger Guide</strong><button onClick={onClose}><X size={16}/></button></div>
+    <div className="guide-content">
+      <h3>How to use the PDF Merger</h3>
+      <p>Use this page to join several PDF files into one PDF, fully inside your browser.</p>
+      <ol>
+        <li>Drop or pick one PDF in each row.</li>
+        <li>Use the arrow buttons to decide which PDF comes first, second, and so on.</li>
+        <li>Use “Add another file” for more PDFs.</li>
+        <li>Use the trash button to clear a required row or remove an extra row.</li>
+        <li>Click “Merge and download” to save the final PDF.</li>
+      </ol>
+      <div className="guide-he" dir="rtl">
+        <h3>מדריך בעברית</h3>
+        <p>העמוד הזה מחבר כמה קבצי PDF לקובץ PDF אחד, ישירות בדפדפן.</p>
+        <ol>
+          <li>גרור או בחר קובץ PDF אחד בכל שורה.</li>
+          <li>השתמש בחיצים כדי לבחור את סדר הקבצים.</li>
+          <li>לחץ על “Add another file” כדי להוסיף עוד PDF.</li>
+          <li>כפתור הפח מנקה שורה חובה או מוחק שורה נוספת.</li>
+          <li>לחץ על “Merge and download” כדי להוריד את הקובץ המאוחד.</li>
+        </ol>
+      </div>
+    </div>
+  </aside>;
+}
+
 function UploadSlot({ row, index, total, onFile, onMove, onDelete }) {
   const inputRef = useRef(null);
   const setFromFiles = fileList => {
@@ -71,6 +100,7 @@ function MergeApp() {
   const [rows, setRows] = useState([fileRow(), fileRow()]);
   const [message, setMessage] = useState('Choose at least 2 PDF files. The merge happens fully in your browser.');
   const [busy, setBusy] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   React.useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
   const setFile = (id, file) => {
@@ -106,7 +136,9 @@ function MergeApp() {
       setBusy(false);
     }
   };
-  return <main className="merge-page">
+  return <>
+  <GuidePanel open={guideOpen} onClose={() => setGuideOpen(false)} />
+  <main className={`merge-page ${guideOpen ? 'with-guide' : ''}`}>
     <div className="top-actions">
       <button className="theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
         {theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}
@@ -117,7 +149,7 @@ function MergeApp() {
       <div>
         <p className="eyebrow">CodeExtractor Pro</p>
         <h1>PDF Merger</h1>
-        <p>Upload several PDF files, choose their order, and download one merged PDFe.</p>
+        <div className="subtitle-line"><button className="guide-button" onClick={() => setGuideOpen(true)}><HelpCircle size={16}/>How To Use</button><p>Upload several PDF files, choose their order, and download one merged PDF.</p></div>
       </div>
       <a className="back-link" href="/" target="_blank" rel="noreferrer"><ArrowLeft size={17}/> CodeExtractor</a>
     </section>
@@ -133,7 +165,8 @@ function MergeApp() {
         <p className="merge-message"><FileText size={15}/> {message}</p>
       </div>
     </section>
-  </main>;
+  </main>
+  </>;
 }
 
 createRoot(document.getElementById('root')).render(<MergeApp />);

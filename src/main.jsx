@@ -13,7 +13,7 @@ import json from 'highlight.js/lib/languages/json';
 import bash from 'highlight.js/lib/languages/bash';
 import plaintext from 'highlight.js/lib/languages/plaintext';
 import { Document, Packer, Paragraph, TextRun, PageOrientation, AlignmentType } from 'docx';
-import { Archive, ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileCode2, FileText, Folder, FolderOpen, Moon, Sun, Trash2, UploadCloud, X } from 'lucide-react';
+import { Archive, ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileCode2, FileText, Folder, FolderOpen, HelpCircle, Moon, Settings, Sun, Trash2, UploadCloud, X } from 'lucide-react';
 import './styles.css';
 
 hljs.registerLanguage('csharp', csharp);
@@ -26,16 +26,67 @@ hljs.registerLanguage('json', json);
 hljs.registerLanguage('bash', bash);
 hljs.registerLanguage('plaintext', plaintext);
 
-const OUTPUT_EXTENSIONS = new Set([
-  '.cs', '.xaml', '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.m', '.mm',
-  '.as', '.css', '.js', '.jsx', '.ts', '.tsx', '.html', '.htm', '.config',
-  '.razor', '.cshtml', '.json', '.xml', '.sql', '.md', '.txt', '.yml', '.yaml',
-  '.scss', '.sass', '.less', '.php', '.java', '.py', '.rb', '.go', '.rs', '.swift',
-  '.kt', '.kts', '.vb', '.fs', '.fsx', '.sh', '.bat', '.ps1', '.dockerfile', '.env'
-]);
+const EXTENSION_OPTIONS = [
+  { ext: '.cs', label: 'C# (.cs)', defaultOn: true },
+  { ext: '.xaml', label: 'XAML (.xaml)', defaultOn: true },
+  { ext: '.razor', label: 'Razor (.razor)', defaultOn: true },
+  { ext: '.html', label: 'HTML (.html)', defaultOn: true },
+  { ext: '.config', label: 'Config (.config)', defaultOn: true },
+  { ext: '.c', label: 'C (.c)' },
+  { ext: '.h', label: 'C/C++ Header (.h)' },
+  { ext: '.cpp', label: 'C++ (.cpp)' },
+  { ext: '.hpp', label: 'C++ Header (.hpp)' },
+  { ext: '.js', label: 'JavaScript (.js)' },
+  { ext: '.jsx', label: 'React JS (.jsx)' },
+  { ext: '.ts', label: 'TypeScript (.ts)' },
+  { ext: '.tsx', label: 'React TS (.tsx)' },
+  { ext: '.css', label: 'CSS (.css)' },
+  { ext: '.scss', label: 'SCSS (.scss)' },
+  { ext: '.json', label: 'JSON (.json)' },
+  { ext: '.xml', label: 'XML (.xml)' },
+  { ext: '.sql', label: 'SQL (.sql)' },
+  { ext: '.md', label: 'Markdown (.md)' },
+  { ext: '.txt', label: 'Text (.txt)' },
+  { ext: '.yml', label: 'YAML (.yml)' },
+  { ext: '.yaml', label: 'YAML (.yaml)' },
+  { ext: '.py', label: 'Python (.py)' },
+  { ext: '.java', label: 'Java (.java)' },
+  { ext: '.php', label: 'PHP (.php)' },
+  { ext: '.rb', label: 'Ruby (.rb)' },
+  { ext: '.go', label: 'Go (.go)' },
+  { ext: '.rs', label: 'Rust (.rs)' },
+  { ext: '.swift', label: 'Swift (.swift)' },
+  { ext: '.kt', label: 'Kotlin (.kt)' },
+  { ext: '.vb', label: 'VB.NET (.vb)' },
+  { ext: '.fs', label: 'F# (.fs)' },
+  { ext: '.sh', label: 'Shell (.sh)' },
+  { ext: '.bat', label: 'Batch (.bat)' },
+  { ext: '.ps1', label: 'PowerShell (.ps1)' },
+  { ext: '.makefile', label: 'Makefile' },
+  { ext: '.dockerfile', label: 'Dockerfile' },
+  { ext: '.env', label: 'Environment (.env)' }
+];
+const DEFAULT_EXTENSION_SET = EXTENSION_OPTIONS.filter(o => o.defaultOn).map(o => o.ext);
+const ALL_EXTENSION_SET = new Set(EXTENSION_OPTIONS.map(o => o.ext));
+const DEFAULT_SETTINGS = {
+  docxOrientation: 'portrait',
+  docxSavePages: false,
+  selectedExtensions: DEFAULT_EXTENSION_SET
+};
+const SETTINGS_KEY = 'codeExtractorPro.settings.v3';
+const DB_NAME = 'CodeExtractorProState';
+const DB_VERSION = 1;
+const STATE_STORE = 'state';
+const STATE_KEY = 'main';
 
 const CONTEXT_EXTENSIONS = new Set(['.csproj', '.vbproj', '.fsproj', '.sln']);
-const SPECIAL_FILENAMES = new Set(['makefile', 'dockerfile', 'app.config', 'web.config', '.editorconfig']);
+const SPECIAL_FILENAMES = new Map([
+  ['makefile', '.makefile'],
+  ['dockerfile', '.dockerfile'],
+  ['app.config', '.config'],
+  ['web.config', '.config'],
+  ['.editorconfig', '.config']
+]);
 const IGNORE_PARTS = new Set(['node_modules', '.git', '.vs', 'bin', 'obj', 'dist', 'build', '.next', '.vercel', 'coverage', '.idea', '.vscode']);
 const LARGE_DOCX_COLOR_CHAR_LIMIT = 3_000_000;
 
@@ -48,6 +99,86 @@ const TYPE_COLORS = {
   property: 'FF0000', function: '795E26', class: '2B91AF', default: '000000'
 };
 
+function normalizeSettings(raw) {
+  const selectedExtensions = Array.isArray(raw?.selectedExtensions)
+    ? raw.selectedExtensions.filter(ext => ALL_EXTENSION_SET.has(ext))
+    : DEFAULT_SETTINGS.selectedExtensions;
+  return {
+    docxOrientation: raw?.docxOrientation === 'landscape' ? 'landscape' : 'portrait',
+    docxSavePages: Boolean(raw?.docxSavePages),
+    selectedExtensions: selectedExtensions.length ? selectedExtensions : DEFAULT_SETTINGS.selectedExtensions
+  };
+}
+function loadSettings() {
+  try { return normalizeSettings(JSON.parse(localStorage.getItem(SETTINGS_KEY) || 'null')); }
+  catch { return DEFAULT_SETTINGS; }
+}
+function saveSettings(settings) {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalizeSettings(settings))); } catch {}
+}
+function openStateDb() {
+  return new Promise((resolve, reject) => {
+    if (!('indexedDB' in window)) { reject(new Error('IndexedDB unavailable')); return; }
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => req.result.createObjectStore(STATE_STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function saveAppState(state) {
+  try {
+    const db = await openStateDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STATE_STORE, 'readwrite');
+      tx.objectStore(STATE_STORE).put(state, STATE_KEY);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  } catch {}
+}
+async function loadAppState() {
+  try {
+    const db = await openStateDb();
+    const value = await new Promise((resolve, reject) => {
+      const tx = db.transaction(STATE_STORE, 'readonly');
+      const req = tx.objectStore(STATE_STORE).get(STATE_KEY);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    return value;
+  } catch { return null; }
+}
+function serializeTree(node) {
+  const children = {};
+  for (const [key, child] of Object.entries(node.children || {})) children[key] = serializeTree(child);
+  const copy = { ...node, children };
+  delete copy.sortedChildren;
+  return copy;
+}
+function deserializeResult(item) {
+  const tree = sortTree(item.tree);
+  return {
+    ...item,
+    tree,
+    selectedPaths: new Set(item.selectedPaths || []),
+    openNodeIds: new Set(item.openNodeIds || collectExpandableNodeIds(tree)),
+    collapsed: Boolean(item.collapsed),
+    leftWidth: item.leftWidth || 320
+  };
+}
+function serializeResult(item) {
+  return {
+    ...item,
+    tree: serializeTree(item.tree),
+    selectedPaths: Array.from(item.selectedPaths || []),
+    openNodeIds: Array.from(item.openNodeIds || []),
+    collapsed: Boolean(item.collapsed),
+    leftWidth: item.leftWidth || 320
+  };
+}
+
 function normalizePath(path) { return path.replace(/\\/g, '/').replace(/^\/+/, ''); }
 function getFileName(path) { return normalizePath(path).split('/').filter(Boolean).pop() || ''; }
 function getExt(path) {
@@ -58,10 +189,12 @@ function getExt(path) {
   return dot >= 0 ? name.slice(dot) : '';
 }
 function isIgnoredPath(path) { return normalizePath(path).split('/').some(part => IGNORE_PARTS.has(part)); }
-function shouldOutput(path) {
+function shouldOutput(path, selectedExtensions = DEFAULT_EXTENSION_SET) {
+  const selected = new Set(selectedExtensions);
   const name = getFileName(path).toLowerCase();
-  const ext = getExt(path);
-  return SPECIAL_FILENAMES.has(name) || OUTPUT_EXTENSIONS.has(ext) || ext === '.makefile' || ext === '.dockerfile';
+  const specialExt = SPECIAL_FILENAMES.get(name);
+  const ext = specialExt || getExt(path);
+  return ALL_EXTENSION_SET.has(ext) && selected.has(ext);
 }
 function shouldReadAsContext(path) { return CONTEXT_EXTENSIONS.has(getExt(path)); }
 function depthOf(path) { return normalizePath(path).split('/').filter(Boolean).length; }
@@ -243,13 +376,15 @@ async function copyText(text) {
   try { return document.execCommand('copy'); }
   finally { document.body.removeChild(ta); }
 }
-async function downloadDocx(result, output) {
+async function downloadDocx(result, output, settings = DEFAULT_SETTINGS) {
   const paragraphs = [];
-  const para = (children) => new Paragraph({ alignment: AlignmentType.LEFT, bidirectional: false, children });
+  const para = (children, extra = {}) => new Paragraph({ alignment: AlignmentType.LEFT, bidirectional: false, children, ...extra });
   const useColor = output.text.length <= LARGE_DOCX_COLOR_CHAR_LIMIT;
-  paragraphs.push(para([new TextRun({ text: `${result.rootName} (${result.tree.solutionLabel || 'zip project'}):`, bold: true, size: 14, font: 'Consolas' })]));
-  function addPlain(line, bold = false) {
-    paragraphs.push(para([new TextRun({ text: line || ' ', bold, size: 14, font: 'Consolas', color: '000000' })]));
+  const savePages = settings.docxSavePages;
+  const orientation = settings.docxOrientation === 'landscape' ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT;
+  let firstFileBlock = true;
+  function addPlain(line, bold = false, extra = {}) {
+    paragraphs.push(para([new TextRun({ text: line || ' ', bold, size: 14, font: 'Consolas', color: '000000' })], extra));
   }
   function addCodeLine(prefix, lineTokensOrText) {
     if (Array.isArray(lineTokensOrText)) {
@@ -258,36 +393,47 @@ async function downloadDocx(result, output) {
       paragraphs.push(para([new TextRun({ text: prefix + (lineTokensOrText || ' '), size: 14, font: 'Consolas', color: '000000' })]));
     }
   }
-  function walk(node, level, path) {
+  function addFileBlock(file, headers) {
+    const pageBreakBefore = !savePages && !firstFileBlock;
+    headers.forEach((header, index) => addPlain(header.text, header.bold, index === 0 ? { pageBreakBefore, keepNext: true } : { keepNext: true }));
+    addPlain(`${indent(headers.length + 1)}~~~`, false, { keepNext: true });
+    const prefix = indent(headers.length + 1);
+    if (useColor) {
+      const codeLines = tokensToLines(highlightedTokens(file.content, file.language));
+      for (const line of codeLines) addCodeLine(prefix, line);
+    } else {
+      for (const line of file.content.replace(/\t/g, '    ').split(/\r\n|\n|\r/)) addCodeLine(prefix, line);
+    }
+    addPlain(`${indent(headers.length + 1)}~~~`);
+    firstFileBlock = false;
+  }
+  function walk(node, level, headers) {
     const hasSelectedDescendant = collectFilePaths(node).some(p => result.selectedPaths.has(p));
     if (!hasSelectedDescendant) return;
     const isFolderish = node.type === 'folder';
-    addPlain(`${indent(level)}${node.name}${isFolderish ? ` (${node.label || ('folder')}):` : ':'}`, isFolderish);
+    const title = `${indent(level)}${node.name}${isFolderish ? ` (${node.label || 'folder'}):` : ':'}`;
+    const nextHeaders = [...headers, { text: title, bold: isFolderish }];
     if ((node.type === 'file') && node.file && result.selectedPaths.has(node.file.path)) {
-      addPlain(`${indent(level + 1)}~~~`);
-      const prefix = indent(level + 1);
-      if (useColor) {
-        const codeLines = tokensToLines(highlightedTokens(node.file.content, node.file.language));
-        for (const line of codeLines) addCodeLine(prefix, line);
-      } else {
-        for (const line of node.file.content.replace(/\t/g, '    ').split(/\r\n|\n|\r/)) addCodeLine(prefix, line);
-      }
-      addPlain(`${indent(level + 1)}~~~`);
+      addFileBlock(node.file, nextHeaders);
+      return;
     }
-    node.sortedChildren?.forEach(child => walk(child, level + 1, `${path}/${child.name}`));
+    node.sortedChildren?.forEach(child => walk(child, level + 1, nextHeaders));
   }
-  result.tree.sortedChildren.forEach(child => walk(child, 1, child.name));
+  const rootHeader = { text: `${result.rootName} (${result.tree.solutionLabel || 'zip project'}):`, bold: true };
+  result.tree.sortedChildren.forEach(child => walk(child, 1, [rootHeader]));
+  if (!paragraphs.length) addPlain(`${result.rootName} (${result.tree.solutionLabel || 'zip project'}):`, true);
   if (!useColor) addPlain('[Large DOCX safety mode: syntax colors were skipped to keep the export stable.]');
   const doc = new Document({
     sections: [{
-      properties: { page: { size: { orientation: PageOrientation.LANDSCAPE }, margin: { top: 360, right: 360, bottom: 360, left: 360 } } },
+      properties: { page: { size: { orientation }, margin: { top: 360, right: 360, bottom: 360, left: 360 } } },
       children: paragraphs
     }]
   });
   const blob = await Packer.toBlob(doc);
   saveAs(blob, `${safeBaseName(result.name)}.docx`);
 }
-async function parseZip(file) {
+
+async function parseZip(file, settings = DEFAULT_SETTINGS) {
   const zip = await JSZip.loadAsync(file);
   const rootName = safeBaseName(file.name);
   const tree = newNode(rootName, 'folder');
@@ -307,7 +453,7 @@ async function parseZip(file) {
   }
   for (const entry of entries) {
     const path = normalizePath(entry.name);
-    if (!shouldOutput(path) || shouldReadAsContext(path)) continue;
+    if (!shouldOutput(path, settings.selectedExtensions) || shouldReadAsContext(path)) continue;
     const content = stripBom(await entry.async('string'));
     const fileObj = { path, name: getFileName(path), content, language: detectLanguage(path), ext: getExt(path) };
     outputFiles.push(fileObj);
@@ -318,7 +464,7 @@ async function parseZip(file) {
   const allFilePaths = outputFiles.map(f => f.path);
   const selectedPaths = new Set(allFilePaths);
   const output = buildSelectedOutput(tree, rootName, selectedPaths);
-  return { id: crypto.randomUUID(), name: file.name, rootName, tree, fileCount: outputFiles.length, allFilePaths, selectedPaths, createdAt: new Date().toLocaleString() };
+  return { id: crypto.randomUUID(), name: file.name, rootName, tree, fileCount: outputFiles.length, allFilePaths, selectedPaths, openNodeIds: new Set(collectExpandableNodeIds(tree)), collapsed: false, leftWidth: 320, createdAt: new Date().toLocaleString() };
 }
 function TriStateBox({ state, onClick }) {
   return <button
@@ -368,15 +514,18 @@ function TreeNode({ node, depth = 0, selectedPaths, setSelectedPaths, openNodes,
     {isExpandable && open && node.sortedChildren?.map(child => <TreeNode key={child.name} node={child} depth={depth + 1} selectedPaths={selectedPaths} setSelectedPaths={setSelectedPaths} openNodes={openNodes} setOpenNodes={setOpenNodes} />)}
   </div>;
 }
-function ResultBlock({ result, onDelete, onSelectionChange }) {
-  const [leftWidth, setLeftWidth] = useState(320);
+function ResultBlock({ result, settings, onDelete, onSelectionChange, onMetaChange }) {
   const [copied, setCopied] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
-  const [openNodes, setOpenNodes] = useState(() => new Set(collectExpandableNodeIds(result.tree)));
+  const leftWidth = result.leftWidth || 320;
+  const collapsed = Boolean(result.collapsed);
+  const openNodes = result.openNodeIds || new Set(collectExpandableNodeIds(result.tree));
   const dragging = useRef(false);
   const selectedCount = countSelected(result);
   const selectedOutput = useMemo(() => buildSelectedOutput(result.tree, result.rootName, result.selectedPaths), [result.tree, result.rootName, result.selectedPaths]);
   const setSelectedPaths = updater => onSelectionChange(result.id, updater);
+  const setOpenNodes = updater => onMetaChange(result.id, item => ({ ...item, openNodeIds: typeof updater === 'function' ? updater(item.openNodeIds || new Set()) : updater }));
+  const setCollapsed = updater => onMetaChange(result.id, item => ({ ...item, collapsed: typeof updater === 'function' ? updater(Boolean(item.collapsed)) : updater }));
+  const setLeftWidth = value => onMetaChange(result.id, item => ({ ...item, leftWidth: value }));
   const startDrag = e => { dragging.current = true; e.preventDefault(); };
   React.useEffect(() => {
     const move = e => { if (dragging.current) setLeftWidth(Math.min(620, Math.max(210, e.clientX - 28))); };
@@ -395,7 +544,7 @@ function ResultBlock({ result, onDelete, onSelectionChange }) {
       <div className="actions">
         <button onClick={async () => { await copyText(selectedOutput.text); setCopied(true); setTimeout(() => setCopied(false), 1400); }}><Copy size={16}/>{copied ? 'Copied' : 'Copy text'}</button>
         <button onClick={() => downloadBlob(selectedOutput.text, `${safeBaseName(result.name)}.txt`)}><FileText size={16}/>TXT</button>
-        <button onClick={() => downloadDocx(result, selectedOutput)}><Download size={16}/>DOCX</button>
+        <button onClick={() => downloadDocx(result, selectedOutput, settings)}><Download size={16}/>DOCX</button>
         <button className="danger" onClick={() => onDelete(result.id)}><Trash2 size={16}/>Delete</button>
       </div>
     </header>
@@ -409,6 +558,84 @@ function ResultBlock({ result, onDelete, onSelectionChange }) {
     </div>}
   </section>;
 }
+
+function GuidePanel({ open, onClose, kind }) {
+  const isMerge = kind === 'merge';
+  return <aside className={`guide-panel ${open ? 'open' : ''}`} aria-hidden={!open}>
+    <div className="guide-head"><strong>{isMerge ? 'PDF Merger Guide' : 'CodeExtractor Guide'}</strong><button onClick={onClose}><X size={16}/></button></div>
+    {isMerge ? <div className="guide-content">
+      <h3>How to use the PDF Merger</h3>
+      <p>Use this page to join several PDF files into one PDF, fully inside your browser.</p>
+      <ol>
+        <li>Drop or pick one PDF in each row.</li>
+        <li>Use the arrow buttons to decide which PDF comes first, second, and so on.</li>
+        <li>Use “Add another file” for more PDFs.</li>
+        <li>Use the trash button to clear a required row or remove an extra row.</li>
+        <li>Click “Merge and download” to save the final PDF.</li>
+      </ol>
+      <div className="guide-he" dir="rtl">
+        <h3>מדריך בעברית</h3>
+        <p>העמוד הזה מחבר כמה קבצי PDF לקובץ PDF אחד, ישירות בדפדפן.</p>
+        <ol>
+          <li>גרור או בחר קובץ PDF אחד בכל שורה.</li>
+          <li>השתמש בחיצים כדי לבחור את סדר הקבצים.</li>
+          <li>לחץ על “Add another file” כדי להוסיף עוד PDF.</li>
+          <li>כפתור הפח מנקה שורה חובה או מוחק שורה נוספת.</li>
+          <li>לחץ על “Merge and download” כדי להוריד את הקובץ המאוחד.</li>
+        </ol>
+      </div>
+    </div> : <div className="guide-content">
+      <h3>How to use CodeExtractor Pro</h3>
+      <p>Use this page to turn project ZIP files into clean text for AI prompts, reviews, and documentation.</p>
+      <ol>
+        <li>Drop one or more project ZIP files into the upload box, or click the box to pick them.</li>
+        <li>Each ZIP opens in its own block with a Solution Explorer on the left and generated text on the right.</li>
+        <li>Select or unselect files and folders with the blue checkboxes. The output updates automatically.</li>
+        <li>Drag the divider to resize the Solution Explorer.</li>
+        <li>Use Copy text, TXT, or DOCX to export the selected code.</li>
+        <li>Open Settings to choose default DOCX layout and which file types are extracted from future ZIP uploads.</li>
+      </ol>
+      <div className="guide-he" dir="rtl">
+        <h3>מדריך בעברית</h3>
+        <p>העמוד הזה הופך קבצי ZIP של פרויקטים לטקסט נקי ומסודר לשימוש עם AI, בדיקות ותיעוד.</p>
+        <ol>
+          <li>גרור קובץ ZIP אחד או יותר לתיבת ההעלאה, או לחץ עליה כדי לבחור מהמחשב.</li>
+          <li>כל ZIP נפתח בבלוק משלו עם Solution Explorer בצד שמאל וטקסט שנוצר בצד ימין.</li>
+          <li>בחר או בטל בחירה של קבצים ותיקיות בעזרת תיבות הסימון הכחולות.</li>
+          <li>גרור את הקו המפריד כדי לשנות את רוחב ה־Solution Explorer.</li>
+          <li>השתמש ב־Copy text, TXT או DOCX כדי לייצא את הקוד שנבחר.</li>
+          <li>פתח Settings כדי לבחור הגדרות DOCX וסוגי קבצים שיופקו מה־ZIP בהעלאות הבאות.</li>
+        </ol>
+      </div>
+    </div>}
+  </aside>;
+}
+function SettingsModal({ settings, onChange, onClose }) {
+  const selected = new Set(settings.selectedExtensions);
+  const update = patch => onChange(normalizeSettings({ ...settings, ...patch }));
+  const toggleExt = ext => {
+    const next = new Set(selected);
+    if (next.has(ext)) next.delete(ext); else next.add(ext);
+    update({ selectedExtensions: Array.from(next) });
+  };
+  return <div className="modal-backdrop" onMouseDown={onClose}>
+    <section className="settings-modal" onMouseDown={e => e.stopPropagation()}>
+      <div className="settings-head"><div><p className="eyebrow">CodeExtractor Pro</p><h2>Settings</h2></div><button onClick={onClose}><X size={18}/></button></div>
+      <div className="settings-section">
+        <h3>DOCX export</h3>
+        <label className="setting-row"><span>Page orientation</span><select value={settings.docxOrientation} onChange={e => update({ docxOrientation: e.target.value })}><option value="portrait">Vertical / Portrait</option><option value="landscape">Horizontal / Landscape</option></select></label>
+        <label className="setting-check"><input type="checkbox" checked={settings.docxSavePages} onChange={e => update({ docxSavePages: e.target.checked })}/><span>Save pages: do not start every code file on a new page</span></label>
+      </div>
+      <div className="settings-section">
+        <div className="settings-section-title"><h3>ZIP file types</h3><button onClick={() => update({ selectedExtensions: DEFAULT_EXTENSION_SET })}>Reset defaults</button><button onClick={() => update({ selectedExtensions: Array.from(ALL_EXTENSION_SET) })}>Select all</button></div>
+        <p className="settings-note">These choices apply to the next ZIP files you upload. Defaults are .cs, .xaml, .razor, .html, and .config.</p>
+        <div className="extension-grid">
+          {EXTENSION_OPTIONS.map(option => <label key={option.ext} className="extension-pill"><input type="checkbox" checked={selected.has(option.ext)} onChange={() => toggleExt(option.ext)}/><span>{option.label}</span></label>)}
+        </div>
+      </div>
+    </section>
+  </div>;
+}
 function getInitialTheme() {
   if (typeof window === 'undefined') return 'light';
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
@@ -419,18 +646,36 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [theme, setTheme] = useState(getInitialTheme);
+  const [settings, setSettings] = useState(loadSettings);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [loadedSavedState, setLoadedSavedState] = useState(false);
   const inputRef = useRef(null);
   const totalFiles = useMemo(() => results.reduce((sum, r) => sum + r.fileCount, 0), [results]);
   React.useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+  React.useEffect(() => { saveSettings(settings); }, [settings]);
+  React.useEffect(() => {
+    let alive = true;
+    loadAppState().then(saved => {
+      if (!alive) return;
+      if (saved?.results) setResults(saved.results.map(deserializeResult));
+      setLoadedSavedState(true);
+    });
+    return () => { alive = false; };
+  }, []);
+  React.useEffect(() => {
+    if (!loadedSavedState) return;
+    saveAppState({ results: results.map(serializeResult) });
+  }, [results, loadedSavedState]);
   async function handleFiles(fileList) {
     const zips = Array.from(fileList || []).filter(f => f.name.toLowerCase().endsWith('.zip'));
     if (!zips.length) { setError('Please choose one or more .zip files.'); return; }
     setBusy(true); setError('');
     try {
       const parsed = [];
-      for (const zip of zips) parsed.push(await parseZip(zip));
+      for (const zip of zips) parsed.push(await parseZip(zip, settings));
       setResults(prev => [...parsed, ...prev]);
     } catch (e) {
       console.error(e);
@@ -444,19 +689,26 @@ function App() {
       return { ...item, selectedPaths };
     }));
   };
+  const updateResultMeta = (id, updater) => {
+    setResults(prev => prev.map(item => item.id === id ? updater(item) : item));
+  };
   const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
-  return <main>
+  return <>
+  <GuidePanel open={guideOpen} onClose={() => setGuideOpen(false)} kind="extractor" />
+  {settingsOpen && <SettingsModal settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}
+  <main className={guideOpen ? 'with-guide' : ''}>
     <div className="top-actions">
       <button className="merge-nav-button" onClick={() => window.open('/merge.html', '_blank', 'noopener,noreferrer')} title="Open PDF Merger in a new tab">
         <ExternalLink size={17}/> PDF Merger
       </button>
+      <button className="theme-toggle" onClick={() => setSettingsOpen(true)}><Settings size={17}/>Settings</button>
       <button className="theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
         {theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}
         {theme === 'dark' ? 'Light' : 'Dark'}
       </button>
     </div>
     <section className="hero">
-      <div><p className="eyebrow">CodeExtractor Pro</p><h1>Turn code project ZIPs into clean text.</h1><p className="subtitle">Multiple ZIPs, solution-style structure, selectable files, TXT export, and DOCX export with syntax-colored code at 7pt.</p></div>
+      <div><p className="eyebrow">CodeExtractor Pro</p><h1>Turn code project ZIPs into clean text.</h1><div className="subtitle-line"><button className="guide-button" onClick={() => setGuideOpen(true)}><HelpCircle size={16}/>How To Use</button><p className="subtitle">Multiple ZIPs, solution-style structure, selectable files, TXT export, and DOCX export with syntax-colored code at 7pt.</p></div></div>
       <div className="stats"><strong>{results.length}</strong><span>ZIPs loaded</span><strong>{totalFiles}</strong><span>files extracted</span></div>
     </section>
     <section className="dropzone" onDrop={e => { e.preventDefault(); handleFiles(e.dataTransfer.files); }} onDragOver={e => e.preventDefault()} onClick={() => inputRef.current?.click()}>
@@ -464,8 +716,9 @@ function App() {
       <input ref={inputRef} type="file" accept=".zip" multiple onChange={e => handleFiles(e.target.files)} />
     </section>
     {error && <div className="error"><X size={16}/>{error}</div>}
-    <section className="results">{results.map(r => <ResultBlock key={r.id} result={r} onDelete={id => setResults(prev => prev.filter(x => x.id !== id))} onSelectionChange={updateSelection} />)}</section>
-  </main>;
+    <section className="results">{results.map(r => <ResultBlock key={r.id} result={r} settings={settings} onDelete={id => setResults(prev => prev.filter(x => x.id !== id))} onSelectionChange={updateSelection} onMetaChange={updateResultMeta} />)}</section>
+  </main>
+  </>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);
