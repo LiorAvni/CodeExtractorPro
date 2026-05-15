@@ -149,7 +149,7 @@ function MergeApp() {
       <div>
         <p className="eyebrow">CodeExtractor Pro</p>
         <h1>PDF Merger</h1>
-        <div className="subtitle-line"><button className="guide-button" onClick={() => setGuideOpen(true)}><HelpCircle size={16}/>How To Use</button><p>Upload several PDF files, choose their order, and download one merged PDF.</p></div>
+        <div className="subtitle-line"><button className="guide-button" onClick={() => setGuideOpen(prev => !prev)} aria-expanded={guideOpen}><HelpCircle size={16}/>How To Use</button><p>Upload several PDF files, choose their order, and download one merged PDF.</p></div>
       </div>
       <a className="back-link" href="/" target="_blank" rel="noreferrer"><ArrowLeft size={17}/> CodeExtractor</a>
     </section>
