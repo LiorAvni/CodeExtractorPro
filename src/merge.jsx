@@ -2,7 +2,6 @@ import React, { useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
-import { Document, Packer, PageBreak, PageOrientation, Paragraph, TextRun, AlignmentType } from 'docx';
 import { PDFDocument } from 'pdf-lib';
 import { ArrowDown, ArrowLeft, ArrowUp, FileText, Merge, Moon, Plus, Sun, Trash2, UploadCloud } from 'lucide-react';
 import './styles.css';
@@ -32,57 +31,79 @@ function validateFiles(files) {
   if (!kinds.every(k => k === kinds[0])) return { ok: false, message: 'Do not mix DOCX and PDF files. Merge DOCX with DOCX, or PDF with PDF.' };
   return { ok: true, kind: kinds[0] };
 }
-function textRuns(text, options = {}) {
-  const value = text || ' ';
-  return [new TextRun({ text: value, size: 14, font: 'Consolas', color: '000000', ...options })];
+function xmlEscape(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }
-function collectParagraphText(paragraphNode) {
-  let out = '';
-  const walk = node => {
-    for (const child of node.childNodes || []) {
-      const name = child.localName;
-      if (name === 't') out += child.textContent || '';
-      else if (name === 'tab') out += '    ';
-      else if (name === 'br') out += '\n';
-      else walk(child);
-    }
-  };
-  walk(paragraphNode);
-  return out;
+function buildDocxContentTypes(fileCount) {
+  const chunks = Array.from({ length: fileCount }, (_, index) =>
+    `<Override PartName="/word/afchunks/file${index + 1}.docx" ContentType="${DOCX_MIME}"/>`
+  ).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="docx" ContentType="${DOCX_MIME}"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  ${chunks}
+</Types>`;
 }
-async function extractDocxParagraphs(file) {
-  const zip = await JSZip.loadAsync(await file.arrayBuffer());
-  const docFile = zip.file('word/document.xml');
-  if (!docFile) throw new Error(`${file.name} does not look like a valid DOCX file.`);
-  const xmlText = await docFile.async('string');
-  const xml = new DOMParser().parseFromString(xmlText, 'application/xml');
-  if (xml.getElementsByTagName('parsererror').length) throw new Error(`Could not read ${file.name}.`);
-  const body = Array.from(xml.getElementsByTagNameNS('*', 'body'))[0];
-  if (!body) throw new Error(`Could not find document body in ${file.name}.`);
-  const paragraphs = Array.from(body.getElementsByTagNameNS('*', 'p'));
-  return paragraphs.flatMap(p => {
-    const text = collectParagraphText(p).replace(/\u00a0/g, ' ');
-    const split = text.split(/\r\n|\n|\r/);
-    return split.length ? split : [''];
-  });
+function buildDocxPackageRels() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`;
+}
+function buildDocxDocumentRels(fileCount) {
+  const rels = Array.from({ length: fileCount }, (_, index) =>
+    `<Relationship Id="afchunk${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="afchunks/file${index + 1}.docx"/>`
+  ).join('\n  ');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  ${rels}
+</Relationships>`;
+}
+function buildAltChunkDocument(files) {
+  const body = files.map((file, index) => {
+    const pageBreak = index === 0 ? '' : '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+    const name = xmlEscape(file.name);
+    return `${pageBreak}
+<w:p>
+  <w:pPr><w:spacing w:after="120"/></w:pPr>
+  <w:r><w:rPr><w:b/><w:sz w:val="18"/><w:color w:val="666666"/></w:rPr><w:t>${name}</w:t></w:r>
+</w:p>
+<w:altChunk r:id="afchunk${index + 1}"/>`;
+  }).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    ${body}
+    <w:sectPr>
+      <w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/>
+      <w:pgMar w:top="360" w:right="360" w:bottom="360" w:left="360" w:header="720" w:footer="720" w:gutter="0"/>
+    </w:sectPr>
+  </w:body>
+</w:document>`;
 }
 async function mergeDocxFiles(files) {
-  const children = [];
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', buildDocxContentTypes(files.length));
+  zip.folder('_rels').file('.rels', buildDocxPackageRels());
+  zip.folder('word').file('document.xml', buildAltChunkDocument(files));
+  zip.folder('word').folder('_rels').file('document.xml.rels', buildDocxDocumentRels(files.length));
+  const chunkFolder = zip.folder('word').folder('afchunks');
+
   for (let i = 0; i < files.length; i++) {
-    if (i > 0) children.push(new Paragraph({ children: [new PageBreak()] }));
-    const paragraphs = await extractDocxParagraphs(files[i]);
-    for (const line of paragraphs) {
-      children.push(new Paragraph({ alignment: AlignmentType.LEFT, bidirectional: false, children: textRuns(line) }));
-    }
+    const arrayBuffer = await files[i].arrayBuffer();
+    chunkFolder.file(`file${i + 1}.docx`, arrayBuffer, { binary: true });
     await delayFrame();
   }
-  const doc = new Document({
-    sections: [{
-      properties: { page: { size: { orientation: PageOrientation.LANDSCAPE }, margin: { top: 360, right: 360, bottom: 360, left: 360 } } },
-      children
-    }]
-  });
-  return Packer.toBlob(doc);
+
+  return zip.generateAsync({ type: 'blob', mimeType: DOCX_MIME, compression: 'STORE' });
 }
 async function mergePdfFiles(files) {
   const merged = await PDFDocument.create();
@@ -117,7 +138,7 @@ function UploadSlot({ row, index, total, onFile, onMove, onDelete }) {
     <div className="row-tools">
       <button onClick={() => onMove(index, -1)} disabled={index === 0} title="Move up"><ArrowUp size={16}/></button>
       <button onClick={() => onMove(index, 1)} disabled={index === total - 1} title="Move down"><ArrowDown size={16}/></button>
-      <button className="delete-row" onClick={() => onDelete(row.id)} disabled={total <= 2} title="Delete row"><Trash2 size={16}/></button>
+      <button className="delete-row" onClick={() => onDelete(row.id)} title={total <= 2 ? 'Clear file' : 'Delete row'}><Trash2 size={16}/></button>
     </div>
   </div>;
 }
@@ -143,7 +164,7 @@ function MergeApp() {
       return next;
     });
   };
-  const deleteRow = id => setRows(prev => prev.length <= 2 ? prev : prev.filter(row => row.id !== id));
+  const deleteRow = id => setRows(prev => prev.length <= 2 ? prev.map(row => row.id === id ? { ...row, file: null } : row) : prev.filter(row => row.id !== id));
   const readyFiles = rows.map(row => row.file).filter(Boolean);
   const validation = validateFiles(readyFiles);
   const canMerge = validation.ok && !busy;
@@ -156,7 +177,7 @@ function MergeApp() {
       const extension = validation.kind === 'pdf' ? 'pdf' : 'docx';
       const mime = validation.kind === 'pdf' ? PDF_MIME : DOCX_MIME;
       saveAs(blob.type ? blob : new Blob([blob], { type: mime }), `${safeMergedName(readyFiles[0], extension)}_merged.${extension}`);
-      setMessage(`Merged ${readyFiles.length} ${validation.kind.toUpperCase()} files successfully.`);
+      setMessage(validation.kind === 'docx' ? `Merged ${readyFiles.length} DOCX files successfully. Open in Microsoft Word to see the original formatting, colors, and images preserved.` : `Merged ${readyFiles.length} PDF files successfully.`);
     } catch (e) {
       console.error(e);
       setMessage(e?.message || 'Could not merge the selected files. Very complex or encrypted files may not be mergeable in the browser.');
