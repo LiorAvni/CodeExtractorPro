@@ -13,7 +13,7 @@ import json from 'highlight.js/lib/languages/json';
 import bash from 'highlight.js/lib/languages/bash';
 import plaintext from 'highlight.js/lib/languages/plaintext';
 import { Document, Packer, Paragraph, TextRun, PageOrientation, AlignmentType } from 'docx';
-import { Archive, ChevronDown, ChevronRight, Copy, Download, FileCode2, FileText, Folder, FolderOpen, Moon, Sun, Trash2, UploadCloud, X } from 'lucide-react';
+import { Archive, ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileCode2, FileText, Folder, FolderOpen, Moon, Sun, Trash2, UploadCloud, X } from 'lucide-react';
 import './styles.css';
 
 hljs.registerLanguage('csharp', csharp);
@@ -297,11 +297,27 @@ function TriStateBox({ state, onClick }) {
     title="Toggle selection"
   >{state === 'all' ? '✓' : state === 'partial' ? '—' : ''}</button>;
 }
-function TreeNode({ node, depth = 0, selectedPaths, setSelectedPaths }) {
-  const [open, setOpen] = useState(true);
+function collectExpandableNodeIds(node) {
+  const ids = [];
+  const isExpandable = (node.type === 'folder') && node.sortedChildren?.length > 0;
+  if (isExpandable) ids.push(node.id);
+  node.sortedChildren?.forEach(child => ids.push(...collectExpandableNodeIds(child)));
+  return ids;
+}
+function TreeNode({ node, depth = 0, selectedPaths, setSelectedPaths, openNodes, setOpenNodes }) {
   const isExpandable = (node.type === 'folder') && node.sortedChildren?.length > 0;
   const isFolderish = node.type === 'folder';
+  const open = isExpandable && openNodes.has(node.id);
   const selectionState = getSelectionState(node, selectedPaths);
+  const toggleOpen = () => {
+    if (!isExpandable) return;
+    setOpenNodes(prev => {
+      const next = new Set(prev);
+      if (next.has(node.id)) next.delete(node.id);
+      else next.add(node.id);
+      return next;
+    });
+  };
   const toggleSelected = () => {
     const paths = collectFilePaths(node);
     setSelectedPaths(prev => {
@@ -312,18 +328,20 @@ function TreeNode({ node, depth = 0, selectedPaths, setSelectedPaths }) {
     });
   };
   return <div>
-    <div className="tree-row" style={{ paddingLeft: 8 + depth * 16 }} title={node.name} onClick={() => isExpandable && setOpen(!open)}>
+    <div className="tree-row" style={{ paddingLeft: 8 + depth * 16 }} title={node.name} onClick={toggleOpen}>
       <span className="chevron">{isExpandable ? (open ? <ChevronDown size={14}/> : <ChevronRight size={14}/>) : <span className="chevron-spacer" />}</span>
       <TriStateBox state={selectionState} onClick={toggleSelected} />
       <span className="node-icon">{isFolderish ? (open ? <FolderOpen size={15}/> : <Folder size={15}/>) : <FileCode2 size={15}/>}</span>
       <span className="node-name">{node.name}</span>{node.label && <em>{node.label}</em>}
     </div>
-    {isExpandable && open && node.sortedChildren?.map(child => <TreeNode key={child.name} node={child} depth={depth + 1} selectedPaths={selectedPaths} setSelectedPaths={setSelectedPaths} />)}
+    {isExpandable && open && node.sortedChildren?.map(child => <TreeNode key={child.name} node={child} depth={depth + 1} selectedPaths={selectedPaths} setSelectedPaths={setSelectedPaths} openNodes={openNodes} setOpenNodes={setOpenNodes} />)}
   </div>;
 }
 function ResultBlock({ result, onDelete, onSelectionChange }) {
   const [leftWidth, setLeftWidth] = useState(320);
   const [copied, setCopied] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [openNodes, setOpenNodes] = useState(() => new Set(collectExpandableNodeIds(result.tree)));
   const dragging = useRef(false);
   const selectedCount = countSelected(result);
   const selectedOutput = useMemo(() => buildSelectedOutput(result.tree, result.rootName, result.selectedPaths), [result.tree, result.rootName, result.selectedPaths]);
@@ -335,10 +353,14 @@ function ResultBlock({ result, onDelete, onSelectionChange }) {
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
   }, []);
-  const selectAll = () => onSelectionChange(result.id, () => new Set(result.allFilePaths));
-  return <section className="result-card">
+  return <section className={`result-card ${collapsed ? 'is-collapsed' : ''}`}>
     <header className="result-header">
-      <div className="title-wrap"><Archive size={20}/><div><h2>{result.name}</h2><p>{selectedCount} out of {result.fileCount} files selected • {result.createdAt}</p></div></div>
+      <div className="title-wrap">
+        <button className="zip-collapse-button" onClick={() => setCollapsed(prev => !prev)} aria-expanded={!collapsed} title={collapsed ? 'Open ZIP block' : 'Close ZIP block'}>
+          <Archive size={20}/>
+        </button>
+        <div><h2>{result.name}</h2><p>{selectedCount} out of {result.fileCount} files selected • {result.createdAt}</p></div>
+      </div>
       <div className="actions">
         <button onClick={async () => { await copyText(selectedOutput.text); setCopied(true); setTimeout(() => setCopied(false), 1400); }}><Copy size={16}/>{copied ? 'Copied' : 'Copy text'}</button>
         <button onClick={() => downloadBlob(selectedOutput.text, `${safeBaseName(result.name)}.txt`)}><FileText size={16}/>TXT</button>
@@ -346,14 +368,14 @@ function ResultBlock({ result, onDelete, onSelectionChange }) {
         <button className="danger" onClick={() => onDelete(result.id)}><Trash2 size={16}/>Delete</button>
       </div>
     </header>
-    <div className="workspace">
+    {!collapsed && <div className="workspace">
       <aside className="explorer" style={{ width: leftWidth }}>
         <div className="explorer-title"><span>File Explorer</span></div>
-        <TreeNode node={result.tree} selectedPaths={result.selectedPaths} setSelectedPaths={setSelectedPaths} />
+        <TreeNode node={result.tree} selectedPaths={result.selectedPaths} setSelectedPaths={setSelectedPaths} openNodes={openNodes} setOpenNodes={setOpenNodes} />
       </aside>
       <div className="resizer" onMouseDown={startDrag} title="Drag to resize" />
       <pre className="output"><code>{selectedOutput.text}</code></pre>
-    </div>
+    </div>}
   </section>;
 }
 function getInitialTheme() {
@@ -393,10 +415,15 @@ function App() {
   };
   const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
   return <main>
-    <button className="theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
-      {theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}
-      {theme === 'dark' ? 'Light' : 'Dark'}
-    </button>
+    <div className="top-actions">
+      <button className="merge-nav-button" onClick={() => window.open('/merge.html', '_blank', 'noopener,noreferrer')} title="Open DOCX Merger in a new tab">
+        <ExternalLink size={17}/> DOCX Merger
+      </button>
+      <button className="theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
+        {theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}
+        {theme === 'dark' ? 'Light' : 'Dark'}
+      </button>
+    </div>
     <section className="hero">
       <div><p className="eyebrow">CodeExtractor Pro</p><h1>Turn code project ZIPs into clean text.</h1><p className="subtitle">Multiple ZIPs, solution-style structure, selectable files, TXT export, and DOCX export with syntax-colored code at 7pt.</p></div>
       <div className="stats"><strong>{results.length}</strong><span>ZIPs loaded</span><strong>{totalFiles}</strong><span>files extracted</span></div>
