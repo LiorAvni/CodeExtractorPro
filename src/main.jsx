@@ -348,7 +348,7 @@ function ResultBlock({ result, onDelete, onSelectionChange }) {
     </header>
     <div className="workspace">
       <aside className="explorer" style={{ width: leftWidth }}>
-        <div className="explorer-title"><span>File Explorer</span><button onClick={selectAll}>Select All</button></div>
+        <div className="explorer-title"><span>File Explorer</span></div>
         <TreeNode node={result.tree} selectedPaths={result.selectedPaths} setSelectedPaths={setSelectedPaths} />
       </aside>
       <div className="resizer" onMouseDown={startDrag} title="Drag to resize" />
