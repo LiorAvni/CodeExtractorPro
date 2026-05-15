@@ -37,7 +37,7 @@ const OUTPUT_EXTENSIONS = new Set([
 const CONTEXT_EXTENSIONS = new Set(['.csproj', '.vbproj', '.fsproj', '.sln']);
 const SPECIAL_FILENAMES = new Set(['makefile', 'dockerfile', 'app.config', 'web.config', '.editorconfig']);
 const IGNORE_PARTS = new Set(['node_modules', '.git', '.vs', 'bin', 'obj', 'dist', 'build', '.next', '.vercel', 'coverage', '.idea', '.vscode']);
-const MAX_DOCX_PARAGRAPHS = 24000;
+const LARGE_DOCX_COLOR_CHAR_LIMIT = 3_000_000;
 
 const TYPE_COLORS = {
   keyword: '0000FF', built_in: '2B91AF', type: '2B91AF', literal: '0000FF', number: '098658',
@@ -216,19 +216,49 @@ function buildSelectedOutput(tree, rootName, selectedPaths) {
 function countSelected(result) {
   return result.allFilePaths.filter(path => result.selectedPaths.has(path)).length;
 }
-function downloadBlob(text, filename, type = 'text/plain;charset=utf-8') { saveAs(new Blob([text], { type }), filename); }
-async function copyText(text) { await navigator.clipboard.writeText(text); }
+function downloadBlob(text, filename, type = 'text/plain;charset=utf-8') {
+  saveAs(new Blob([text], { type }), filename);
+}
+async function copyText(text) {
+  const blob = new Blob([text], { type: 'text/plain' });
+  try {
+    if (navigator.clipboard?.write && window.ClipboardItem) {
+      await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
+      return true;
+    }
+  } catch {}
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {}
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  ta.style.top = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try { return document.execCommand('copy'); }
+  finally { document.body.removeChild(ta); }
+}
 async function downloadDocx(result, output) {
   const paragraphs = [];
   const para = (children) => new Paragraph({ alignment: AlignmentType.LEFT, bidirectional: false, children });
+  const useColor = output.text.length <= LARGE_DOCX_COLOR_CHAR_LIMIT;
   paragraphs.push(para([new TextRun({ text: `${result.rootName} (${result.tree.solutionLabel || 'zip project'}):`, bold: true, size: 14, font: 'Consolas' })]));
-  let count = 1;
   function addPlain(line, bold = false) {
-    if (count++ > MAX_DOCX_PARAGRAPHS) return;
     paragraphs.push(para([new TextRun({ text: line || ' ', bold, size: 14, font: 'Consolas', color: '000000' })]));
   }
+  function addCodeLine(prefix, lineTokensOrText) {
+    if (Array.isArray(lineTokensOrText)) {
+      paragraphs.push(para([new TextRun({ text: prefix, size: 14, font: 'Consolas' }), ...makeDocxRunsFromLine(lineTokensOrText)]));
+    } else {
+      paragraphs.push(para([new TextRun({ text: prefix + (lineTokensOrText || ' '), size: 14, font: 'Consolas', color: '000000' })]));
+    }
+  }
   function walk(node, level, path) {
-    if (count > MAX_DOCX_PARAGRAPHS) return;
     const hasSelectedDescendant = collectFilePaths(node).some(p => result.selectedPaths.has(p));
     if (!hasSelectedDescendant) return;
     const isFolderish = node.type === 'folder';
@@ -236,17 +266,18 @@ async function downloadDocx(result, output) {
     if ((node.type === 'file') && node.file && result.selectedPaths.has(node.file.path)) {
       addPlain(`${indent(level + 1)}~~~`);
       const prefix = indent(level + 1);
-      const codeLines = tokensToLines(highlightedTokens(node.file.content, node.file.language));
-      for (const line of codeLines) {
-        if (count++ > MAX_DOCX_PARAGRAPHS) break;
-        paragraphs.push(para([new TextRun({ text: prefix, size: 14, font: 'Consolas' }), ...makeDocxRunsFromLine(line)]));
+      if (useColor) {
+        const codeLines = tokensToLines(highlightedTokens(node.file.content, node.file.language));
+        for (const line of codeLines) addCodeLine(prefix, line);
+      } else {
+        for (const line of node.file.content.replace(/\t/g, '    ').split(/\r\n|\n|\r/)) addCodeLine(prefix, line);
       }
       addPlain(`${indent(level + 1)}~~~`);
     }
     node.sortedChildren?.forEach(child => walk(child, level + 1, `${path}/${child.name}`));
   }
   result.tree.sortedChildren.forEach(child => walk(child, 1, child.name));
-  if (count > MAX_DOCX_PARAGRAPHS) addPlain('[DOCX truncated to keep Word stable. Use TXT for the full extraction.]');
+  if (!useColor) addPlain('[Large DOCX safety mode: syntax colors were skipped to keep the export stable.]');
   const doc = new Document({
     sections: [{
       properties: { page: { size: { orientation: PageOrientation.LANDSCAPE }, margin: { top: 360, right: 360, bottom: 360, left: 360 } } },
@@ -287,7 +318,7 @@ async function parseZip(file) {
   const allFilePaths = outputFiles.map(f => f.path);
   const selectedPaths = new Set(allFilePaths);
   const output = buildSelectedOutput(tree, rootName, selectedPaths);
-  return { id: crypto.randomUUID(), name: file.name, rootName, tree, fileCount: outputFiles.length, allFilePaths, selectedPaths, outputText: output.text, filesForDocx: output.filesForDocx, createdAt: new Date().toLocaleString() };
+  return { id: crypto.randomUUID(), name: file.name, rootName, tree, fileCount: outputFiles.length, allFilePaths, selectedPaths, createdAt: new Date().toLocaleString() };
 }
 function TriStateBox({ state, onClick }) {
   return <button
@@ -416,8 +447,8 @@ function App() {
   const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
   return <main>
     <div className="top-actions">
-      <button className="merge-nav-button" onClick={() => window.open('/merge.html', '_blank', 'noopener,noreferrer')} title="Open DOCX Merger in a new tab">
-        <ExternalLink size={17}/> DOCX Merger
+      <button className="merge-nav-button" onClick={() => window.open('/merge.html', '_blank', 'noopener,noreferrer')} title="Open DOCX/PDF Merger in a new tab">
+        <ExternalLink size={17}/> DOCX/PDF Merger
       </button>
       <button className="theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
         {theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}

@@ -10,15 +10,15 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
+    "docx": "latest",
+    "file-saver": "latest",
+    "highlight.js": "latest",
+    "jszip": "latest",
+    "lucide-react": "latest",
+    "pdf-lib": "^1.17.1",
     "react": "latest",
     "react-dom": "latest",
-    "jszip": "latest",
-    "file-saver": "latest",
-    "docx": "latest",
-    "highlight.js": "latest",
-    "lucide-react": "latest"
-  },
-  "devDependencies": {}
+    "typescript": "latest",
+    "vite": "latest"
+  }
 }
