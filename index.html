@@ -10,11 +10,25 @@
     <span class="owner-watermark" aria-hidden="true">John Doe</span>
     <script>
       document.addEventListener('copy', function (event) {
-        const selection = window.getSelection ? window.getSelection().toString() : '';
-        if (selection && selection.includes('John Doe')) {
-          event.clipboardData.setData('text/plain', selection.replaceAll('John Doe', ''));
-          event.preventDefault();
+        const owner = document.querySelector('.owner-watermark');
+        const selection = window.getSelection ? window.getSelection() : null;
+        if (!owner || !selection || selection.rangeCount === 0) return;
+
+        let touchesOwner = false;
+        const temp = document.createElement('div');
+
+        for (let i = 0; i < selection.rangeCount; i++) {
+          const range = selection.getRangeAt(i);
+          if (range.intersectsNode(owner)) touchesOwner = true;
+          temp.appendChild(range.cloneContents());
         }
+
+        if (!touchesOwner) return;
+
+        temp.querySelectorAll('.owner-watermark').forEach(node => node.remove());
+        const copiedText = (temp.innerText || temp.textContent || '').replace(/John Doe/g, '');
+        event.clipboardData.setData('text/plain', copiedText);
+        event.preventDefault();
       });
     </script>
     <script type="module" src="/src/main.jsx"></script>
