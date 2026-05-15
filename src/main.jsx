@@ -13,7 +13,7 @@ import json from 'highlight.js/lib/languages/json';
 import bash from 'highlight.js/lib/languages/bash';
 import plaintext from 'highlight.js/lib/languages/plaintext';
 import { Document, Packer, Paragraph, TextRun, PageOrientation, AlignmentType } from 'docx';
-import { Archive, ChevronDown, ChevronRight, Copy, Download, FileCode2, FileText, Folder, FolderOpen, Trash2, UploadCloud, X } from 'lucide-react';
+import { Archive, ChevronDown, ChevronRight, Copy, Download, FileCode2, FileText, Folder, FolderOpen, Moon, Sun, Trash2, UploadCloud, X } from 'lucide-react';
 import './styles.css';
 
 hljs.registerLanguage('csharp', csharp);
@@ -157,23 +157,6 @@ function insertTreePath(root, filePath, fileObj) {
     node = node.children[part];
   });
 }
-function groupCodeBehindFiles(node) {
-  if (!node.children) return;
-  for (const child of Object.values(node.children)) groupCodeBehindFiles(child);
-  const names = Object.keys(node.children);
-  for (const name of names) {
-    const lower = name.toLowerCase();
-    if (!lower.endsWith('.xaml') && !lower.endsWith('.razor')) continue;
-    const codeBehindName = `${name}.cs`;
-    const primary = node.children[name];
-    const codeBehind = node.children[codeBehindName];
-    if (!primary || !codeBehind || primary.type !== 'file' || codeBehind.type !== 'file') continue;
-    primary.type = 'fileGroup';
-    primary.children = primary.children || {};
-    primary.children[codeBehindName] = codeBehind;
-    delete node.children[codeBehindName];
-  }
-}
 function sortTree(node) {
   const sorted = Object.values(node.children || {}).sort((a, b) => {
     const aFolderish = a.type === 'folder';
@@ -198,7 +181,7 @@ function applyProjectLabels(tree, projectMap) {
 }
 function collectFilePaths(node) {
   const paths = [];
-  if ((node.type === 'file' || node.type === 'fileGroup') && node.file) paths.push(node.file.path);
+  if ((node.type === 'file') && node.file) paths.push(node.file.path);
   node.sortedChildren?.forEach(child => paths.push(...collectFilePaths(child)));
   return paths;
 }
@@ -216,10 +199,10 @@ function buildSelectedOutput(tree, rootName, selectedPaths) {
   function walk(node, level, path) {
     const hasSelectedDescendant = collectFilePaths(node).some(p => selectedPaths.has(p));
     if (!hasSelectedDescendant) return;
-    const isFolderish = node.type === 'folder' || node.type === 'fileGroup';
-    const suffix = isFolderish ? ` (${node.label || (node.type === 'folder' ? 'folder' : 'code-behind group')}):` : ':';
+    const isFolderish = node.type === 'folder';
+    const suffix = isFolderish ? ` (${node.label || ('folder')}):` : ':';
     lines.push(`${indent(level)}${node.name}${suffix}`);
-    if ((node.type === 'file' || node.type === 'fileGroup') && node.file && selectedPaths.has(node.file.path)) {
+    if ((node.type === 'file') && node.file && selectedPaths.has(node.file.path)) {
       lines.push(`${indent(level + 1)}~~~`);
       lines.push(node.file.content.replace(/\t/g, '    '));
       lines.push(`${indent(level + 1)}~~~`);
@@ -248,9 +231,9 @@ async function downloadDocx(result, output) {
     if (count > MAX_DOCX_PARAGRAPHS) return;
     const hasSelectedDescendant = collectFilePaths(node).some(p => result.selectedPaths.has(p));
     if (!hasSelectedDescendant) return;
-    const isFolderish = node.type === 'folder' || node.type === 'fileGroup';
-    addPlain(`${indent(level)}${node.name}${isFolderish ? ` (${node.label || (node.type === 'folder' ? 'folder' : 'code-behind group')}):` : ':'}`, isFolderish);
-    if ((node.type === 'file' || node.type === 'fileGroup') && node.file && result.selectedPaths.has(node.file.path)) {
+    const isFolderish = node.type === 'folder';
+    addPlain(`${indent(level)}${node.name}${isFolderish ? ` (${node.label || ('folder')}):` : ':'}`, isFolderish);
+    if ((node.type === 'file') && node.file && result.selectedPaths.has(node.file.path)) {
       addPlain(`${indent(level + 1)}~~~`);
       const prefix = indent(level + 1);
       const codeLines = tokensToLines(highlightedTokens(node.file.content, node.file.language));
@@ -300,7 +283,6 @@ async function parseZip(file) {
     insertTreePath(tree, path, fileObj);
   }
   applyProjectLabels(tree, projectMap);
-  groupCodeBehindFiles(tree);
   sortTree(tree);
   const allFilePaths = outputFiles.map(f => f.path);
   const selectedPaths = new Set(allFilePaths);
@@ -317,8 +299,8 @@ function TriStateBox({ state, onClick }) {
 }
 function TreeNode({ node, depth = 0, selectedPaths, setSelectedPaths }) {
   const [open, setOpen] = useState(true);
-  const isExpandable = (node.type === 'folder' || node.type === 'fileGroup') && node.sortedChildren?.length > 0;
-  const isFolderish = node.type === 'folder' || node.type === 'fileGroup';
+  const isExpandable = (node.type === 'folder') && node.sortedChildren?.length > 0;
+  const isFolderish = node.type === 'folder';
   const selectionState = getSelectionState(node, selectedPaths);
   const toggleSelected = () => {
     const paths = collectFilePaths(node);
@@ -374,12 +356,21 @@ function ResultBlock({ result, onDelete, onSelectionChange }) {
     </div>
   </section>;
 }
+function getInitialTheme() {
+  if (typeof window === 'undefined') return 'light';
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
 function App() {
   const [results, setResults] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [theme, setTheme] = useState(getInitialTheme);
   const inputRef = useRef(null);
   const totalFiles = useMemo(() => results.reduce((sum, r) => sum + r.fileCount, 0), [results]);
+  React.useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
   async function handleFiles(fileList) {
     const zips = Array.from(fileList || []).filter(f => f.name.toLowerCase().endsWith('.zip'));
     if (!zips.length) { setError('Please choose one or more .zip files.'); return; }
@@ -400,7 +391,12 @@ function App() {
       return { ...item, selectedPaths };
     }));
   };
+  const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
   return <main>
+    <button className="theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
+      {theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}
+      {theme === 'dark' ? 'Light' : 'Dark'}
+    </button>
     <section className="hero">
       <div><p className="eyebrow">CodeExtractor Pro</p><h1>Turn code project ZIPs into clean text.</h1><p className="subtitle">Multiple ZIPs, solution-style structure, selectable files, TXT export, and DOCX export with syntax-colored code at 7pt.</p></div>
       <div className="stats"><strong>{results.length}</strong><span>ZIPs loaded</span><strong>{totalFiles}</strong><span>files extracted</span></div>
