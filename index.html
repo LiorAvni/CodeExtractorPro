@@ -5,9 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CodeExtractor Pro</title>
   </head>
-  <body data-code-extractor-owner="John Doe">
+  <body>
     <div id="root"></div>
     <span class="owner-watermark" aria-hidden="true">John Doe</span>
+    <script>
+      document.addEventListener('copy', function (event) {
+        const selection = window.getSelection ? window.getSelection().toString() : '';
+        if (selection && selection.includes('John Doe')) {
+          event.clipboardData.setData('text/plain', selection.replaceAll('John Doe', ''));
+          event.preventDefault();
+        }
+      });
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
