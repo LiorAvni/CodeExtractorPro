@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@vercel/analytics": "latest",
     "@vitejs/plugin-react": "latest",
     "docx": "latest",
     "file-saver": "latest",
