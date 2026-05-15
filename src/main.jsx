@@ -15,6 +15,7 @@ import plaintext from 'highlight.js/lib/languages/plaintext';
 import { Document, Packer, Paragraph, TextRun, PageOrientation, AlignmentType } from 'docx';
 import { Archive, ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileCode2, FileText, Folder, FolderOpen, HelpCircle, Moon, Settings, Sun, Trash2, UploadCloud, X } from 'lucide-react';
 import './styles.css';
+import { Analytics } from '@vercel/analytics/react';
 
 hljs.registerLanguage('csharp', csharp);
 hljs.registerLanguage('javascript', javascript);
@@ -721,4 +722,9 @@ function App() {
   </>;
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <App />
+    <Analytics />
+  </React.StrictMode>
+);
