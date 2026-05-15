@@ -4,6 +4,7 @@ import { saveAs } from 'file-saver';
 import { PDFDocument } from 'pdf-lib';
 import { ArrowDown, ArrowLeft, ArrowUp, FileText, HelpCircle, Merge, Moon, Plus, Sun, Trash2, UploadCloud, X } from 'lucide-react';
 import './styles.css';
+import { Analytics } from '@vercel/analytics/react';
 
 const PDF_MIME = 'application/pdf';
 
@@ -169,4 +170,9 @@ function MergeApp() {
   </>;
 }
 
-createRoot(document.getElementById('root')).render(<MergeApp />);
+createRoot(document.getElementById('merge-root')).render(
+  <React.StrictMode>
+    <MergeApp />
+    <Analytics />
+  </React.StrictMode>
+);
