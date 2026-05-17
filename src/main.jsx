@@ -69,6 +69,10 @@ const EXTENSION_OPTIONS = [
 ];
 const DEFAULT_EXTENSION_SET = EXTENSION_OPTIONS.filter(o => o.defaultOn).map(o => o.ext);
 const ALL_EXTENSION_SET = new Set(EXTENSION_OPTIONS.map(o => o.ext));
+
+const DOCX_CODE_FONT_SIZE = 10; // docx uses half-points, so 10 = 5pt
+const DOCX_TITLE_FONT_SIZE = 30; // 30 = 15pt
+
 const DEFAULT_SETTINGS = {
   docxOrientation: 'portrait',
   docxSavePages: false,
@@ -275,8 +279,8 @@ function tokensToLines(tokens) {
   return lines;
 }
 function makeDocxRunsFromLine(lineTokens) {
-  if (!lineTokens.length) return [new TextRun({ text: ' ', size: 14, font: 'Consolas' })];
-  return lineTokens.map(t => new TextRun({ text: t.text.replace(/\t/g, '    '), color: t.color, size: 14, font: 'Consolas' }));
+  if (!lineTokens.length) return [new TextRun({ text: ' ', size: DOCX_CODE_FONT_SIZE, font: 'Consolas' })];
+  return lineTokens.map(t => new TextRun({ text: t.text.replace(/\t/g, '    '), color: t.color, size: DOCX_CODE_FONT_SIZE, font: 'Consolas' }));
 }
 function newNode(name, type) {
   return { name, type, children: {}, sortedChildren: [], file: null, label: '', id: crypto.randomUUID() };
@@ -385,13 +389,13 @@ async function downloadDocx(result, output, settings = DEFAULT_SETTINGS) {
   const orientation = settings.docxOrientation === 'landscape' ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT;
   let firstFileBlock = true;
   function addPlain(line, bold = false, extra = {}) {
-    paragraphs.push(para([new TextRun({ text: line || ' ', bold, size: 14, font: 'Consolas', color: '000000' })], extra));
+    paragraphs.push(para([new TextRun({ text: line || ' ', bold, size: DOCX_CODE_FONT_SIZE, font: 'Consolas', color: '000000' })], extra));
   }
   function addCodeLine(prefix, lineTokensOrText) {
     if (Array.isArray(lineTokensOrText)) {
-      paragraphs.push(para([new TextRun({ text: prefix, size: 14, font: 'Consolas' }), ...makeDocxRunsFromLine(lineTokensOrText)]));
+      paragraphs.push(para([new TextRun({ text: prefix, size: DOCX_CODE_FONT_SIZE, font: 'Consolas' }), ...makeDocxRunsFromLine(lineTokensOrText)]));
     } else {
-      paragraphs.push(para([new TextRun({ text: prefix + (lineTokensOrText || ' '), size: 14, font: 'Consolas', color: '000000' })]));
+      paragraphs.push(para([new TextRun({ text: prefix + (lineTokensOrText || ' '), size: DOCX_CODE_FONT_SIZE, font: 'Consolas', color: '000000' })]));
     }
   }
   function addFileBlock(file, headers) {
@@ -420,11 +424,25 @@ async function downloadDocx(result, output, settings = DEFAULT_SETTINGS) {
     }
     node.sortedChildren?.forEach(child => walk(child, level + 1, nextHeaders));
   }
-  const rootHeader = { text: `${result.rootName} (${result.tree.solutionLabel || 'zip project'}):`, bold: true };
-  result.tree.sortedChildren.forEach(child => walk(child, 1, [rootHeader]));
-  if (!paragraphs.length) addPlain(`${result.rootName} (${result.tree.solutionLabel || 'zip project'}):`, true);
+  paragraphs.push(para([
+  new TextRun({
+    text: safeBaseName(result.name),
+    bold: true,
+    size: DOCX_TITLE_FONT_SIZE,
+    font: 'Consolas',
+    color: '000000'
+  })
+], {
+  alignment: AlignmentType.CENTER,
+  spacing: { after: 240 }
+}));
+
+const rootHeader = { text: `${result.rootName} (${result.tree.solutionLabel || 'zip project'}):`, bold: true };
+result.tree.sortedChildren.forEach(child => walk(child, 1, [rootHeader]));
+if (!paragraphs.length) addPlain(`${result.rootName} (${result.tree.solutionLabel || 'zip project'}):`, true);
   if (!useColor) addPlain('[Large DOCX safety mode: syntax colors were skipped to keep the export stable.]');
   const doc = new Document({
+    title: safeBaseName(result.name),
     sections: [{
       properties: { page: { size: { orientation }, margin: { top: 360, right: 360, bottom: 360, left: 360 } } },
       children: paragraphs
@@ -507,7 +525,7 @@ function TreeNode({ node, depth = 0, selectedPaths, setSelectedPaths, openNodes,
   };
   return <div>
     <div className="tree-row" style={{ paddingLeft: 8 + depth * 16 }} title={node.name} onClick={toggleOpen}>
-      <span className="chevron">{isExpandable ? (open ? <ChevronDown size={14}/> : <ChevronRight size={14}/>) : <span className="chevron-spacer" />}</span>
+      <span className="chevron">{isExpandable ? (open ? <ChevronDown size={DOCX_CODE_FONT_SIZE}/> : <ChevronRight size={DOCX_CODE_FONT_SIZE}/>) : <span className="chevron-spacer" />}</span>
       <TriStateBox state={selectionState} onClick={toggleSelected} />
       <span className="node-icon">{isFolderish ? (open ? <FolderOpen size={15}/> : <Folder size={15}/>) : <FileCode2 size={15}/>}</span>
       <span className="node-name">{node.name}</span>{node.label && <em>{node.label}</em>}
