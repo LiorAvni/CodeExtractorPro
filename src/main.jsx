@@ -825,7 +825,7 @@ function App() {
       </button>
     </div>
     <section className="hero">
-      <div><p className="eyebrow">CodeExtractor Pro</p><h1>Turn code project ZIPs into clean text.</h1><div className="subtitle-line"><button className="guide-button" onClick={() => setGuideOpen(prev => !prev)} aria-expanded={guideOpen}><HelpCircle size={16}/>How To Use</button><p className="subtitle">Multiple ZIPs, solution-style structure, selectable files, TXT export, and DOCX export with syntax-colored code at 5pt.</p></div></div>
+      <div><p className="eyebrow">CodeExtractor Pro</p><h1>Turn code project ZIPs and RARs into clean text.</h1><div className="subtitle-line"><button className="guide-button" onClick={() => setGuideOpen(prev => !prev)} aria-expanded={guideOpen}><HelpCircle size={16}/>How To Use</button><p className="subtitle">Multiple ZIPs and RARs, solution-style structure, selectable files, TXT export, and DOCX export with syntax-colored code at 5pt.</p></div></div>
       <div className="stats"><strong>{results.length}</strong><span>archives loaded</span><strong>{totalFiles}</strong><span>files extracted</span></div>
     </section>
     <section className="dropzone" onDrop={e => { e.preventDefault(); handleFiles(e.dataTransfer.files); }} onDragOver={e => e.preventDefault()} onClick={() => inputRef.current?.click()}>
