@@ -1,6 +1,8 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import JSZip from 'jszip';
+import { createExtractorFromData } from 'node-unrar-js/esm';
+import unrarWasmUrl from 'node-unrar-js/esm/js/unrar.wasm?url';
 import { saveAs } from 'file-saver';
 import hljs from 'highlight.js/lib/core';
 import csharp from 'highlight.js/lib/languages/csharp';
@@ -203,7 +205,9 @@ function shouldOutput(path, selectedExtensions = DEFAULT_EXTENSION_SET) {
 }
 function shouldReadAsContext(path) { return CONTEXT_EXTENSIONS.has(getExt(path)); }
 function depthOf(path) { return normalizePath(path).split('/').filter(Boolean).length; }
-function safeBaseName(name) { return name.replace(/\.zip$/i, '').replace(/[^a-z0-9._-]+/gi, '_') || 'code-extract'; }
+function safeBaseName(name) {
+  return name.replace(/\.(zip|rar)$/i, '').replace(/[^a-z0-9._-]+/gi, '_') || 'code-extract';
+}
 function indent(level) { return '  '.repeat(level); }
 function stripBom(text) { return text.replace(/^\uFEFF/, ''); }
 function detectLanguage(path) {
@@ -452,38 +456,120 @@ if (!paragraphs.length) addPlain(`${result.rootName} (${result.tree.solutionLabe
   saveAs(blob, `${safeBaseName(result.name)}.docx`);
 }
 
-async function parseZip(file, settings = DEFAULT_SETTINGS) {
-  const zip = await JSZip.loadAsync(file);
+function buildArchiveResult(file, files, settings = DEFAULT_SETTINGS) {
   const rootName = safeBaseName(file.name);
+  const archiveKind = file.name.toLowerCase().endsWith('.rar') ? 'rar project' : 'zip project';
+
   const tree = newNode(rootName, 'folder');
-  tree.solutionLabel = 'zip project';
+  tree.solutionLabel = archiveKind;
+
   const projectMap = {};
   const outputFiles = [];
-  const entries = Object.values(zip.files).filter(e => !e.dir && !isIgnoredPath(e.name));
 
-  for (const entry of entries) {
-    const path = normalizePath(entry.name);
+  for (const item of files) {
+    const path = normalizePath(item.path);
     if (shouldReadAsContext(path)) {
-      const content = stripBom(await entry.async('string'));
-      const type = detectProjectType(path, content);
+      const type = detectProjectType(path, item.content);
       if (getExt(path) === '.sln') tree.solutionLabel = 'solution';
       else projectMap[path] = type;
     }
   }
-  for (const entry of entries) {
-    const path = normalizePath(entry.name);
+
+  for (const item of files) {
+    const path = normalizePath(item.path);
     if (!shouldOutput(path, settings.selectedExtensions) || shouldReadAsContext(path)) continue;
-    const content = stripBom(await entry.async('string'));
-    const fileObj = { path, name: getFileName(path), content, language: detectLanguage(path), ext: getExt(path) };
+
+    const fileObj = {
+      path,
+      name: getFileName(path),
+      content: item.content,
+      language: detectLanguage(path),
+      ext: getExt(path)
+    };
+
     outputFiles.push(fileObj);
     insertTreePath(tree, path, fileObj);
   }
+
   applyProjectLabels(tree, projectMap);
   sortTree(tree);
+
   const allFilePaths = outputFiles.map(f => f.path);
   const selectedPaths = new Set(allFilePaths);
   const output = buildSelectedOutput(tree, rootName, selectedPaths);
-  return { id: crypto.randomUUID(), name: file.name, rootName, tree, fileCount: outputFiles.length, allFilePaths, selectedPaths, openNodeIds: new Set(collectExpandableNodeIds(tree)), collapsed: false, leftWidth: 320, createdAt: new Date().toLocaleString() };
+
+  return {
+    id: crypto.randomUUID(),
+    name: file.name,
+    rootName,
+    tree,
+    fileCount: outputFiles.length,
+    allFilePaths,
+    selectedPaths,
+    openNodeIds: new Set(collectExpandableNodeIds(tree)),
+    collapsed: false,
+    leftWidth: 320,
+    createdAt: new Date().toLocaleString()
+  };
+}
+
+async function parseZip(file, settings = DEFAULT_SETTINGS) {
+  const zip = await JSZip.loadAsync(file);
+
+  const entries = Object.values(zip.files).filter(e => {
+    const path = normalizePath(e.name);
+    return !e.dir && !isIgnoredPath(path) && (shouldOutput(path, settings.selectedExtensions) || shouldReadAsContext(path));
+  });
+
+  const files = [];
+  for (const entry of entries) {
+    const path = normalizePath(entry.name);
+    const content = stripBom(await entry.async('string'));
+    files.push({ path, content });
+  }
+
+  return buildArchiveResult(file, files, settings);
+}
+
+async function parseRar(file, settings = DEFAULT_SETTINGS) {
+  const data = await file.arrayBuffer();
+  const wasmBinary = await fetch(unrarWasmUrl).then(response => response.arrayBuffer());
+
+  const extractor = await createExtractorFromData({ data, wasmBinary });
+
+  const list = extractor.getFileList();
+  const headers = [...list.fileHeaders];
+
+  const wantedNames = headers
+    .filter(header => {
+      const path = normalizePath(header.name);
+      return !header.flags.directory &&
+        !isIgnoredPath(path) &&
+        (shouldOutput(path, settings.selectedExtensions) || shouldReadAsContext(path));
+    })
+    .map(header => header.name);
+
+  const extracted = extractor.extract({ files: wantedNames });
+  const extractedFiles = [...extracted.files];
+
+  const decoder = new TextDecoder('utf-8');
+  const files = extractedFiles
+    .filter(item => item.extraction && !item.fileHeader.flags.directory)
+    .map(item => ({
+      path: normalizePath(item.fileHeader.name),
+      content: stripBom(decoder.decode(item.extraction))
+    }));
+
+  return buildArchiveResult(file, files, settings);
+}
+
+async function parseArchive(file, settings = DEFAULT_SETTINGS) {
+  const name = file.name.toLowerCase();
+
+  if (name.endsWith('.zip')) return parseZip(file, settings);
+  if (name.endsWith('.rar')) return parseRar(file, settings);
+
+  throw new Error('Unsupported archive type');
 }
 function TriStateBox({ state, onClick }) {
   return <button
@@ -607,23 +693,23 @@ function GuidePanel({ open, onClose, kind }) {
       <h3>How to use CodeExtractor Pro</h3>
       <p>Use this page to turn project ZIP files into clean text for AI prompts, reviews, and documentation.</p>
       <ol>
-        <li>Drop one or more project ZIP files into the upload box, or click the box to pick them.</li>
+        <li>Drop one or more project ZIP/RAR files into the upload box, or click the box to pick them.</li>
         <li>Each ZIP opens in its own block with a Solution Explorer on the left and generated text on the right.</li>
         <li>Select or unselect files and folders with the blue checkboxes. The output updates automatically.</li>
         <li>Drag the divider to resize the Solution Explorer.</li>
         <li>Use Copy text, TXT, or DOCX to export the selected code.</li>
-        <li>Open Settings to choose default DOCX layout and which file types are extracted from future ZIP uploads.</li>
+        <li>Open Settings to choose default DOCX layout and which file types are extracted from future ZIP/RAR uploads.</li>
       </ol>
       <div className="guide-he" dir="rtl">
         <h3>מדריך בעברית</h3>
         <p>העמוד הזה הופך קבצי ZIP של פרויקטים לטקסט נקי ומסודר לשימוש עם AI, בדיקות ותיעוד.</p>
         <ol>
-          <li>גרור קובץ ZIP אחד או יותר לתיבת ההעלאה, או לחץ עליה כדי לבחור מהמחשב.</li>
+          <li>גרור קובץ ZIP/RAR אחד או יותר לתיבת ההעלאה, או לחץ עליה כדי לבחור מהמחשב.</li>
           <li>כל ZIP נפתח בבלוק משלו עם Solution Explorer בצד שמאל וטקסט שנוצר בצד ימין.</li>
           <li>בחר או בטל בחירה של קבצים ותיקיות בעזרת תיבות הסימון הכחולות.</li>
           <li>גרור את הקו המפריד כדי לשנות את רוחב ה־Solution Explorer.</li>
           <li>השתמש ב־Copy text, TXT או DOCX כדי לייצא את הקוד שנבחר.</li>
-          <li>פתח Settings כדי לבחור הגדרות DOCX וסוגי קבצים שיופקו מה־ZIP בהעלאות הבאות.</li>
+          <li>פתח Settings כדי לבחור הגדרות DOCX וסוגי קבצים שיופקו מה־ZIP/RAR בהעלאות הבאות.</li>
         </ol>
       </div>
     </div>}
@@ -689,17 +775,29 @@ function App() {
     saveAppState({ results: results.map(serializeResult) });
   }, [results, loadedSavedState]);
   async function handleFiles(fileList) {
-    const zips = Array.from(fileList || []).filter(f => f.name.toLowerCase().endsWith('.zip'));
-    if (!zips.length) { setError('Please choose one or more .zip files.'); return; }
-    setBusy(true); setError('');
+    const archives = Array.from(fileList || []).filter(f => {
+    const name = f.name.toLowerCase();
+    return name.endsWith('.zip') || name.endsWith('.rar');
+    });
+    
+    if (!archives.length) {
+      setError('Please choose one or more .zip or .rar files.');
+      return;
+    }
+    
+    setBusy(true);
+    setError('');
+    
     try {
       const parsed = [];
-      for (const zip of zips) parsed.push(await parseZip(zip, settings));
+      for (const archive of archives) parsed.push(await parseArchive(archive, settings));
       setResults(prev => [...parsed, ...prev]);
     } catch (e) {
       console.error(e);
-      setError('Could not parse one of the ZIP files. Make sure it is a valid project ZIP and not password-protected.');
-    } finally { setBusy(false); }
+      setError('Could not parse one of the archive files. Make sure it is a valid .zip/.rar project archive and not password-protected.');
+    } finally {
+      setBusy(false);
+    }
   }
   const updateSelection = (id, updater) => {
     setResults(prev => prev.map(item => {
@@ -728,11 +826,11 @@ function App() {
     </div>
     <section className="hero">
       <div><p className="eyebrow">CodeExtractor Pro</p><h1>Turn code project ZIPs into clean text.</h1><div className="subtitle-line"><button className="guide-button" onClick={() => setGuideOpen(prev => !prev)} aria-expanded={guideOpen}><HelpCircle size={16}/>How To Use</button><p className="subtitle">Multiple ZIPs, solution-style structure, selectable files, TXT export, and DOCX export with syntax-colored code at 5pt.</p></div></div>
-      <div className="stats"><strong>{results.length}</strong><span>ZIPs loaded</span><strong>{totalFiles}</strong><span>files extracted</span></div>
+      <div className="stats"><strong>{results.length}</strong><span>archives loaded</span><strong>{totalFiles}</strong><span>files extracted</span></div>
     </section>
     <section className="dropzone" onDrop={e => { e.preventDefault(); handleFiles(e.dataTransfer.files); }} onDragOver={e => e.preventDefault()} onClick={() => inputRef.current?.click()}>
-      <UploadCloud size={42}/><h2>{busy ? 'Extracting…' : 'Drop ZIP files here or click to choose'}</h2><p>Runs fully in your browser. No project files are uploaded to a server.</p>
-      <input ref={inputRef} type="file" accept=".zip" multiple onChange={e => handleFiles(e.target.files)} />
+      <UploadCloud size={42}/><h2>{busy ? 'Extracting…' : 'Drop ZIP/RAR files here or click to choose'}</h2><p>Runs fully in your browser. No project files are uploaded to a server.</p>
+      <input ref={inputRef} type="file" accept=".zip,.rar,application/zip,application/x-rar-compressed" multiple onChange={e => handleFiles(e.target.files)} />
     </section>
     {error && <div className="error"><X size={16}/>{error}</div>}
     <section className="results">{results.map(r => <ResultBlock key={r.id} result={r} settings={settings} onDelete={id => setResults(prev => prev.filter(x => x.id !== id))} onSelectionChange={updateSelection} onMetaChange={updateResultMeta} />)}</section>
