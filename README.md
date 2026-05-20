@@ -1,6 +1,6 @@
 # CodeExtractor Pro
 
-A Vercel-ready React/Vite website that turns one or more project `.zip` files into organized AI-ready text output.
+A Vercel-ready React/Vite website that turns one or more project `.zip` and `.rar` files into organized AI-ready text output.
 
 ## Features
 
