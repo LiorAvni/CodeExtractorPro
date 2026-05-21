@@ -4,6 +4,7 @@ import JSZip from 'jszip';
 import { createExtractorFromData } from 'node-unrar-js/esm';
 import unrarWasmUrl from 'node-unrar-js/esm/js/unrar.wasm?url';
 import { saveAs } from 'file-saver';
+import { PDFDocument } from 'pdf-lib';
 import hljs from 'highlight.js/lib/core';
 import csharp from 'highlight.js/lib/languages/csharp';
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -15,7 +16,7 @@ import json from 'highlight.js/lib/languages/json';
 import bash from 'highlight.js/lib/languages/bash';
 import plaintext from 'highlight.js/lib/languages/plaintext';
 import { Document, Packer, Paragraph, TextRun, PageOrientation, AlignmentType } from 'docx';
-import { Archive, ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileCode2, FileText, Folder, FolderOpen, HelpCircle, Moon, Settings, Sun, Trash2, UploadCloud, X } from 'lucide-react';
+import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Copy, Download, FileCode2, FileText, Folder, FolderOpen, HelpCircle, Merge, Moon, Plus, Settings, Sun, Trash2, UploadCloud, X } from 'lucide-react';
 import './styles.css';
 import { Analytics } from '@vercel/analytics/react';
 
@@ -78,9 +79,17 @@ const DOCX_TITLE_FONT_SIZE = 30; // 30 = 15pt
 const DEFAULT_SETTINGS = {
   docxOrientation: 'portrait',
   docxSavePages: false,
+  includePropertiesFolder: false,
   selectedExtensions: DEFAULT_EXTENSION_SET
 };
-const SETTINGS_KEY = 'codeExtractorPro.settings.v3';
+const DEFAULT_MERGE_SETTINGS = {
+  fileNameMode: 'first',
+  customFileName: 'merged-files'
+};
+const SETTINGS_KEY = 'codeExtractorPro.settings.v4';
+const MERGE_SETTINGS_KEY = 'codeExtractorPro.mergeSettings.v1';
+const THEME_KEY = 'codeExtractorPro.theme.v1';
+const ACTIVE_PAGE_KEY = 'codeExtractorPro.activePage.v1';
 const DB_NAME = 'CodeExtractorProState';
 const DB_VERSION = 1;
 const STATE_STORE = 'state';
@@ -113,6 +122,7 @@ function normalizeSettings(raw) {
   return {
     docxOrientation: raw?.docxOrientation === 'landscape' ? 'landscape' : 'portrait',
     docxSavePages: Boolean(raw?.docxSavePages),
+    includePropertiesFolder: Boolean(raw?.includePropertiesFolder),
     selectedExtensions: selectedExtensions.length ? selectedExtensions : DEFAULT_SETTINGS.selectedExtensions
   };
 }
@@ -122,6 +132,39 @@ function loadSettings() {
 }
 function saveSettings(settings) {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalizeSettings(settings))); } catch {}
+}
+
+function normalizeMergeSettings(raw) {
+  const fileNameMode = raw?.fileNameMode === 'custom' ? 'custom' : 'first';
+  const customFileName = String(raw?.customFileName || DEFAULT_MERGE_SETTINGS.customFileName).trim() || DEFAULT_MERGE_SETTINGS.customFileName;
+  return { fileNameMode, customFileName };
+}
+function loadMergeSettings() {
+  try { return normalizeMergeSettings(JSON.parse(localStorage.getItem(MERGE_SETTINGS_KEY) || 'null')); }
+  catch { return DEFAULT_MERGE_SETTINGS; }
+}
+function saveMergeSettings(settings) {
+  try { localStorage.setItem(MERGE_SETTINGS_KEY, JSON.stringify(normalizeMergeSettings(settings))); } catch {}
+}
+function loadTheme() {
+  try {
+    const stored = localStorage.getItem(THEME_KEY);
+    if (stored === 'dark' || stored === 'light') return stored;
+  } catch {}
+  return getSystemTheme();
+}
+function saveTheme(theme) {
+  try { localStorage.setItem(THEME_KEY, theme); } catch {}
+}
+function loadActivePage() {
+  if (typeof window === 'undefined') return 'extractor';
+  if (window.location.hash === '#merger') return 'merger';
+  if (window.location.hash === '#extractor') return 'extractor';
+  try { return localStorage.getItem(ACTIVE_PAGE_KEY) === 'merger' ? 'merger' : 'extractor'; }
+  catch { return 'extractor'; }
+}
+function saveActivePage(page) {
+  try { localStorage.setItem(ACTIVE_PAGE_KEY, page); } catch {}
 }
 function openStateDb() {
   return new Promise((resolve, reject) => {
@@ -195,7 +238,11 @@ function getExt(path) {
   const dot = name.lastIndexOf('.');
   return dot >= 0 ? name.slice(dot) : '';
 }
-function isIgnoredPath(path) { return normalizePath(path).split('/').some(part => IGNORE_PARTS.has(part)); }
+function isIgnoredPath(path, settings = DEFAULT_SETTINGS) {
+  const parts = normalizePath(path).split('/');
+  if (!settings.includePropertiesFolder && parts.some(part => part.toLowerCase() === 'properties')) return true;
+  return parts.some(part => IGNORE_PARTS.has(part));
+}
 function shouldOutput(path, selectedExtensions = DEFAULT_EXTENSION_SET) {
   const selected = new Set(selectedExtensions);
   const name = getFileName(path).toLowerCase();
@@ -518,7 +565,7 @@ async function parseZip(file, settings = DEFAULT_SETTINGS) {
 
   const entries = Object.values(zip.files).filter(e => {
     const path = normalizePath(e.name);
-    return !e.dir && !isIgnoredPath(path) && (shouldOutput(path, settings.selectedExtensions) || shouldReadAsContext(path));
+    return !e.dir && !isIgnoredPath(path, settings) && (shouldOutput(path, settings.selectedExtensions) || shouldReadAsContext(path));
   });
 
   const files = [];
@@ -544,7 +591,7 @@ async function parseRar(file, settings = DEFAULT_SETTINGS) {
     .filter(header => {
       const path = normalizePath(header.name);
       return !header.flags.directory &&
-        !isIgnoredPath(path) &&
+        !isIgnoredPath(path, settings) &&
         (shouldOutput(path, settings.selectedExtensions) || shouldReadAsContext(path));
     })
     .map(header => header.name);
@@ -715,9 +762,11 @@ function GuidePanel({ open, onClose, kind }) {
     </div>}
   </aside>;
 }
-function SettingsModal({ settings, onChange, onClose }) {
+function SettingsModal({ page, settings, mergeSettings, onChange, onMergeChange, onClose, onResetPage }) {
+  const isMerger = page === 'merger';
   const selected = new Set(settings.selectedExtensions);
   const update = patch => onChange(normalizeSettings({ ...settings, ...patch }));
+  const updateMerge = patch => onMergeChange(normalizeMergeSettings({ ...mergeSettings, ...patch }));
   const toggleExt = ext => {
     const next = new Set(selected);
     if (next.has(ext)) next.delete(ext); else next.add(ext);
@@ -725,69 +774,232 @@ function SettingsModal({ settings, onChange, onClose }) {
   };
   return <div className="modal-backdrop" onMouseDown={onClose}>
     <section className="settings-modal" onMouseDown={e => e.stopPropagation()}>
-      <div className="settings-head"><div><p className="eyebrow">CodeExtractor Pro</p><h2>Settings</h2></div><button onClick={onClose}><X size={18}/></button></div>
-      <div className="settings-section">
-        <h3>DOCX export</h3>
-        <label className="setting-row"><span>Page orientation</span><select value={settings.docxOrientation} onChange={e => update({ docxOrientation: e.target.value })}><option value="portrait">Vertical / Portrait</option><option value="landscape">Horizontal / Landscape</option></select></label>
-        <label className="setting-check"><input type="checkbox" checked={settings.docxSavePages} onChange={e => update({ docxSavePages: e.target.checked })}/><span>Save pages: do not start every code file on a new page</span></label>
-      </div>
-      <div className="settings-section">
-        <div className="settings-section-title"><h3>ZIP file types</h3><button onClick={() => update({ selectedExtensions: DEFAULT_EXTENSION_SET })}>Reset defaults</button><button onClick={() => update({ selectedExtensions: Array.from(ALL_EXTENSION_SET) })}>Select all</button></div>
-        <p className="settings-note">These choices apply to the next ZIP files you upload. Defaults are .cs, .xaml, .razor, .html, and .config.</p>
-        <div className="extension-grid">
-          {EXTENSION_OPTIONS.map(option => <label key={option.ext} className="extension-pill"><input type="checkbox" checked={selected.has(option.ext)} onChange={() => toggleExt(option.ext)}/><span>{option.label}</span></label>)}
+      <div className="settings-head"><div><p className="eyebrow">CodeExtractor Pro</p><h2>{isMerger ? 'PDF Merger Settings' : 'CodeExtractor Settings'}</h2></div><button onClick={onClose}><X size={18}/></button></div>
+      {isMerger ? <>
+        <div className="settings-section">
+          <h3>Merged PDF file name</h3>
+          <label className="setting-row"><span>Download name</span><select value={mergeSettings.fileNameMode} onChange={e => updateMerge({ fileNameMode: e.target.value })}><option value="first">Use the first PDF name + _merged</option><option value="custom">Use a custom name</option></select></label>
+          <label className="setting-row setting-row-stacked"><span>Custom file name</span><input type="text" value={mergeSettings.customFileName} onChange={e => updateMerge({ customFileName: e.target.value })} placeholder="merged-files" disabled={mergeSettings.fileNameMode !== 'custom'} /></label>
+          <p className="settings-note">PDF files, their order, and this setting are saved in this browser and restored after reload.</p>
         </div>
+      </> : <>
+        <div className="settings-section">
+          <h3>DOCX export</h3>
+          <label className="setting-row"><span>Page orientation</span><select value={settings.docxOrientation} onChange={e => update({ docxOrientation: e.target.value })}><option value="portrait">Vertical / Portrait</option><option value="landscape">Horizontal / Landscape</option></select></label>
+          <label className="setting-check"><input type="checkbox" checked={settings.docxSavePages} onChange={e => update({ docxSavePages: e.target.checked })}/><span>Save pages: do not start every code file on a new page</span></label>
+        </div>
+        <div className="settings-section">
+          <div className="settings-section-title"><h3>ZIP/RAR file types and folders</h3><button onClick={() => update({ selectedExtensions: DEFAULT_EXTENSION_SET, includePropertiesFolder: false })}>Reset defaults</button><button onClick={() => update({ selectedExtensions: Array.from(ALL_EXTENSION_SET) })}>Select all</button></div>
+          <p className="settings-note">These choices apply to the next ZIP/RAR files you upload. By default, the C# Properties folder is skipped.</p>
+          <label className="setting-check"><input type="checkbox" checked={settings.includePropertiesFolder} onChange={e => update({ includePropertiesFolder: e.target.checked })}/><span>Also extract files inside Properties folders</span></label>
+          <div className="extension-grid">
+            {EXTENSION_OPTIONS.map(option => <label key={option.ext} className="extension-pill"><input type="checkbox" checked={selected.has(option.ext)} onChange={() => toggleExt(option.ext)}/><span>{option.label}</span></label>)}
+          </div>
+        </div>
+      </>}
+      <div className="settings-reset-zone">
+        <button className="settings-reset-button" onClick={onResetPage}>Reset this page to the beginning</button>
+        <p>{isMerger ? 'Clears all selected PDF files, order, and PDF Merger settings.' : 'Clears all uploaded projects, selections, explorer state, and CodeExtractor settings.'}</p>
       </div>
     </section>
   </div>;
 }
-function getInitialTheme() {
+
+const PDF_MIME = 'application/pdf';
+function fileRow(file = null) { return { id: crypto.randomUUID(), file }; }
+function ensureTwoRows(rows) {
+  const next = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  while (next.length < 2) next.push(fileRow());
+  return next;
+}
+function delayFrame() { return new Promise(resolve => requestAnimationFrame(resolve)); }
+function mergeKind(file) {
+  const name = file?.name?.toLowerCase() || '';
+  if (name.endsWith('.pdf')) return 'pdf';
+  return '';
+}
+function safeMergedNameFromText(text) {
+  return String(text || 'merged-files').replace(/\.pdf$/i, '').replace(/[^a-z0-9._-]+/gi, '_') || 'merged-files';
+}
+function safeMergedName(file) {
+  return safeMergedNameFromText(file?.name || 'merged-files.pdf');
+}
+function validateFiles(files) {
+  if (files.length < 2) return { ok: false, message: 'Choose at least 2 PDF files.' };
+  if (files.some(file => mergeKind(file) !== 'pdf')) return { ok: false, message: 'Only .pdf files are supported.' };
+  return { ok: true };
+}
+async function mergePdfFiles(files) {
+  const merged = await PDFDocument.create();
+  for (const file of files) {
+    const source = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
+    const pages = await merged.copyPages(source, source.getPageIndices());
+    pages.forEach(page => merged.addPage(page));
+    await delayFrame();
+  }
+  const bytes = await merged.save({ useObjectStreams: true });
+  return new Blob([bytes], { type: PDF_MIME });
+}
+function mergedDownloadName(files, mergeSettings) {
+  const normalized = normalizeMergeSettings(mergeSettings);
+  const base = normalized.fileNameMode === 'custom' ? safeMergedNameFromText(normalized.customFileName) : `${safeMergedName(files[0])}_merged`;
+  return `${base}.pdf`;
+}
+function UploadSlot({ row, index, total, onFile, onMove, onDelete }) {
+  const inputRef = useRef(null);
+  const setFromFiles = fileList => {
+    const file = Array.from(fileList || [])[0];
+    if (!file) return;
+    onFile(row.id, file);
+    if (inputRef.current) inputRef.current.value = '';
+  };
+  return <div className="merge-row">
+    <div className="merge-index">{index + 1}</div>
+    <label className="docx-drop" onDrop={e => { e.preventDefault(); setFromFiles(e.dataTransfer.files); }} onDragOver={e => e.preventDefault()}>
+      <UploadCloud size={26}/>
+      <div>
+        <strong>{row.file ? row.file.name : 'Drop a PDF file here or click to choose'}</strong>
+        <span>{row.file ? `${(row.file.size / 1024 / 1024).toFixed(2)} MB` : 'Max 1 file in this slot'}</span>
+      </div>
+      <input ref={inputRef} type="file" accept=".pdf,application/pdf" onChange={e => setFromFiles(e.target.files)} />
+    </label>
+    <div className="row-tools">
+      <button onClick={() => onMove(index, -1)} disabled={index === 0} title="Move up"><ArrowUp size={16}/></button>
+      <button onClick={() => onMove(index, 1)} disabled={index === total - 1} title="Move down"><ArrowDown size={16}/></button>
+      <button className="delete-row" onClick={() => onDelete(row.id)} title={total <= 2 ? 'Clear file' : 'Delete row'}><Trash2 size={16}/></button>
+    </div>
+  </div>;
+}
+function PdfMergerPage({ rows, setRows, mergeSettings, busy, setBusy, message, setMessage, guideOpen, setGuideOpen }) {
+  const setFile = (id, file) => {
+    if (!mergeKind(file)) { setMessage('Please choose a .pdf file.'); return; }
+    setRows(prev => ensureTwoRows(prev.map(row => row.id === id ? { ...row, file } : row)));
+    setMessage('Use the arrow buttons to choose the merge order. Your selected PDFs are saved for this browser.');
+  };
+  const moveRow = (index, direction) => {
+    setRows(prev => {
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+      return next;
+    });
+  };
+  const deleteRow = id => setRows(prev => ensureTwoRows(prev.length <= 2 ? prev.map(row => row.id === id ? { ...row, file: null } : row) : prev.filter(row => row.id !== id)));
+  const readyFiles = rows.map(row => row.file).filter(Boolean);
+  const validation = validateFiles(readyFiles);
+  const canMerge = validation.ok && !busy;
+  const doMerge = async () => {
+    if (!validation.ok) { setMessage(validation.message); return; }
+    setBusy(true);
+    setMessage('Merging PDF files...');
+    try {
+      const blob = await mergePdfFiles(readyFiles);
+      saveAs(blob.type ? blob : new Blob([blob], { type: PDF_MIME }), mergedDownloadName(readyFiles, mergeSettings));
+      setMessage(`Merged ${readyFiles.length} PDF files successfully.`);
+    } catch (e) {
+      console.error(e);
+      setMessage(e?.message || 'Could not merge the selected files. Very complex or encrypted files may not be mergeable in the browser.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <main className={`merge-page ${guideOpen ? 'with-guide' : ''}`}>
+    <section className="merge-hero">
+      <div>
+        <p className="eyebrow">CodeExtractor Pro</p>
+        <h1>PDF Merger</h1>
+        <div className="subtitle-line"><button className="guide-button" onClick={() => setGuideOpen(prev => !prev)} aria-expanded={guideOpen}><HelpCircle size={16}/>How To Use</button><p>Upload several PDF files, choose their order, and download one merged PDF.</p></div>
+      </div>
+      <div className="stats"><strong>{readyFiles.length}</strong><span>PDF files ready</span><strong>{rows.length}</strong><span>merge slots</span></div>
+    </section>
+    <section className="merge-card">
+      <div className="merge-list">
+        {rows.map((row, index) => <UploadSlot key={row.id} row={row} index={index} total={rows.length} onFile={setFile} onMove={moveRow} onDelete={deleteRow} />)}
+      </div>
+      <div className="merge-footer">
+        <div className="merge-footer-left">
+          <button onClick={() => setRows(prev => [...prev, fileRow()])}><Plus size={17}/> Add another file</button>
+          <button className="merge-primary" onClick={doMerge} disabled={!canMerge}><Merge size={17}/>{busy ? 'Merging...' : 'Merge and download'}</button>
+        </div>
+        <p className="merge-message"><FileText size={15}/> {message}</p>
+      </div>
+    </section>
+  </main>;
+}
+
+function getSystemTheme() {
   if (typeof window === 'undefined') return 'light';
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
 function App() {
+  const [activePage, setActivePageState] = useState(loadActivePage);
   const [results, setResults] = useState([]);
+  const [mergeRows, setMergeRows] = useState(() => ensureTwoRows([]));
   const [busy, setBusy] = useState(false);
+  const [mergeBusy, setMergeBusy] = useState(false);
   const [error, setError] = useState('');
-  const [theme, setTheme] = useState(getInitialTheme);
+  const [mergeMessage, setMergeMessage] = useState('Choose at least 2 PDF files. The merge happens fully in your browser.');
+  const [theme, setTheme] = useState(loadTheme);
   const [settings, setSettings] = useState(loadSettings);
+  const [mergeSettings, setMergeSettings] = useState(loadMergeSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
   const [loadedSavedState, setLoadedSavedState] = useState(false);
   const inputRef = useRef(null);
   const totalFiles = useMemo(() => results.reduce((sum, r) => sum + r.fileCount, 0), [results]);
+
+  const setActivePage = page => {
+    setGuideOpen(false);
+    setActivePageState(page);
+    saveActivePage(page);
+    if (typeof window !== 'undefined') {
+      const hash = page === 'merger' ? '#merger' : '#extractor';
+      if (window.location.hash !== hash) window.history.replaceState(null, '', hash);
+    }
+  };
+
+  React.useEffect(() => {
+    const onHashChange = () => setActivePageState(window.location.hash === '#merger' ? 'merger' : 'extractor');
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
   React.useEffect(() => {
     document.documentElement.dataset.theme = theme;
+    saveTheme(theme);
   }, [theme]);
   React.useEffect(() => { saveSettings(settings); }, [settings]);
+  React.useEffect(() => { saveMergeSettings(mergeSettings); }, [mergeSettings]);
   React.useEffect(() => {
     let alive = true;
     loadAppState().then(saved => {
       if (!alive) return;
       if (saved?.results) setResults(saved.results.map(deserializeResult));
+      if (saved?.mergeRows) setMergeRows(ensureTwoRows(saved.mergeRows));
       setLoadedSavedState(true);
     });
     return () => { alive = false; };
   }, []);
   React.useEffect(() => {
     if (!loadedSavedState) return;
-    saveAppState({ results: results.map(serializeResult) });
-  }, [results, loadedSavedState]);
+    saveAppState({
+      results: results.map(serializeResult),
+      mergeRows: ensureTwoRows(mergeRows).map(row => ({ id: row.id, file: row.file || null }))
+    });
+  }, [results, mergeRows, loadedSavedState]);
+
   async function handleFiles(fileList) {
     const archives = Array.from(fileList || []).filter(f => {
-    const name = f.name.toLowerCase();
-    return name.endsWith('.zip') || name.endsWith('.rar');
+      const name = f.name.toLowerCase();
+      return name.endsWith('.zip') || name.endsWith('.rar');
     });
-    
     if (!archives.length) {
       setError('Please choose one or more .zip or .rar files.');
       return;
     }
-    
     setBusy(true);
     setError('');
-    
     try {
       const parsed = [];
       for (const archive of archives) parsed.push(await parseArchive(archive, settings));
@@ -806,17 +1018,31 @@ function App() {
       return { ...item, selectedPaths };
     }));
   };
-  const updateResultMeta = (id, updater) => {
-    setResults(prev => prev.map(item => item.id === id ? updater(item) : item));
-  };
+  const updateResultMeta = (id, updater) => setResults(prev => prev.map(item => item.id === id ? updater(item) : item));
   const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+  const resetExtractorPage = () => {
+    setResults([]);
+    setSettings(DEFAULT_SETTINGS);
+    setError('');
+    setSettingsOpen(false);
+  };
+  const resetMergerPage = () => {
+    setMergeRows(ensureTwoRows([]));
+    setMergeSettings(DEFAULT_MERGE_SETTINGS);
+    setMergeMessage('Choose at least 2 PDF files. The merge happens fully in your browser.');
+    setSettingsOpen(false);
+  };
+  const resetCurrentPage = () => {
+    if (activePage === 'merger') resetMergerPage();
+    else resetExtractorPage();
+  };
+
   return <>
-  <GuidePanel open={guideOpen} onClose={() => setGuideOpen(false)} kind="extractor" />
-  {settingsOpen && <SettingsModal settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}
-  <main className={guideOpen ? 'with-guide' : ''}>
+    <GuidePanel open={guideOpen} onClose={() => setGuideOpen(false)} kind={activePage === 'merger' ? 'merge' : 'extractor'} />
+    {settingsOpen && <SettingsModal page={activePage} settings={settings} mergeSettings={mergeSettings} onChange={setSettings} onMergeChange={setMergeSettings} onClose={() => setSettingsOpen(false)} onResetPage={resetCurrentPage} />}
     <div className="top-actions">
-      <button className="merge-nav-button" onClick={() => window.open('/merge.html', '_blank', 'noopener,noreferrer')} title="Open PDF Merger in a new tab">
-        <ExternalLink size={17}/> PDF Merger
+      <button className="merge-nav-button" onClick={() => setActivePage(activePage === 'merger' ? 'extractor' : 'merger')} title={activePage === 'merger' ? 'Go to CodeExtractor Pro' : 'Go to PDF Merger'}>
+        {activePage === 'merger' ? <FileCode2 size={17}/> : <Merge size={17}/>} {activePage === 'merger' ? 'CodeExtractor' : 'PDF Merger'}
       </button>
       <button className="theme-toggle" onClick={() => setSettingsOpen(true)}><Settings size={17}/>Settings</button>
       <button className="theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
@@ -824,17 +1050,18 @@ function App() {
         {theme === 'dark' ? 'Light' : 'Dark'}
       </button>
     </div>
-    <section className="hero">
-      <div><p className="eyebrow">CodeExtractor Pro</p><h1>Turn code project ZIPs and RARs into clean text.</h1><div className="subtitle-line"><button className="guide-button" onClick={() => setGuideOpen(prev => !prev)} aria-expanded={guideOpen}><HelpCircle size={16}/>How To Use</button><p className="subtitle">Multiple ZIPs and RARs, solution-style structure, selectable files, TXT export, and DOCX export with syntax-colored code at 5pt.</p></div></div>
-      <div className="stats"><strong>{results.length}</strong><span>archives loaded</span><strong>{totalFiles}</strong><span>files extracted</span></div>
-    </section>
-    <section className="dropzone" onDrop={e => { e.preventDefault(); handleFiles(e.dataTransfer.files); }} onDragOver={e => e.preventDefault()} onClick={() => inputRef.current?.click()}>
-      <UploadCloud size={42}/><h2>{busy ? 'Extracting…' : 'Drop ZIP/RAR files here or click to choose'}</h2><p>Runs fully in your browser. No project files are uploaded to a server.</p>
-      <input ref={inputRef} type="file" accept=".zip,.rar,application/zip,application/x-rar-compressed" multiple onChange={e => handleFiles(e.target.files)} />
-    </section>
-    {error && <div className="error"><X size={16}/>{error}</div>}
-    <section className="results">{results.map(r => <ResultBlock key={r.id} result={r} settings={settings} onDelete={id => setResults(prev => prev.filter(x => x.id !== id))} onSelectionChange={updateSelection} onMetaChange={updateResultMeta} />)}</section>
-  </main>
+    {activePage === 'merger' ? <PdfMergerPage rows={mergeRows} setRows={setMergeRows} mergeSettings={mergeSettings} busy={mergeBusy} setBusy={setMergeBusy} message={mergeMessage} setMessage={setMergeMessage} guideOpen={guideOpen} setGuideOpen={setGuideOpen} /> : <main className={guideOpen ? 'with-guide' : ''}>
+      <section className="hero">
+        <div><p className="eyebrow">CodeExtractor Pro</p><h1>Turn code project ZIPs and RARs into clean text.</h1><div className="subtitle-line"><button className="guide-button" onClick={() => setGuideOpen(prev => !prev)} aria-expanded={guideOpen}><HelpCircle size={16}/>How To Use</button><p className="subtitle">Multiple ZIPs and RARs, solution-style structure, selectable files, TXT export, and DOCX export with syntax-colored code at 5pt.</p></div></div>
+        <div className="stats"><strong>{results.length}</strong><span>archives loaded</span><strong>{totalFiles}</strong><span>files extracted</span></div>
+      </section>
+      <section className="dropzone" onDrop={e => { e.preventDefault(); handleFiles(e.dataTransfer.files); }} onDragOver={e => e.preventDefault()} onClick={() => inputRef.current?.click()}>
+        <UploadCloud size={42}/><h2>{busy ? 'Extracting…' : 'Drop ZIP/RAR files here or click to choose'}</h2><p>Runs fully in your browser. No project files are uploaded to a server.</p>
+        <input ref={inputRef} type="file" accept=".zip,.rar,application/zip,application/x-rar-compressed" multiple onChange={e => handleFiles(e.target.files)} />
+      </section>
+      {error && <div className="error"><X size={16}/>{error}</div>}
+      <section className="results">{results.map(r => <ResultBlock key={r.id} result={r} settings={settings} onDelete={id => setResults(prev => prev.filter(x => x.id !== id))} onSelectionChange={updateSelection} onMetaChange={updateResultMeta} />)}</section>
+    </main>}
   </>;
 }
 
