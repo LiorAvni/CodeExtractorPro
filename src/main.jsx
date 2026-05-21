@@ -79,7 +79,6 @@ const DOCX_TITLE_FONT_SIZE = 30; // 30 = 15pt
 const DEFAULT_SETTINGS = {
   docxOrientation: 'portrait',
   docxSavePages: false,
-  includePropertiesFolder: false,
   selectedExtensions: DEFAULT_EXTENSION_SET
 };
 const DEFAULT_MERGE_SETTINGS = {
@@ -122,7 +121,6 @@ function normalizeSettings(raw) {
   return {
     docxOrientation: raw?.docxOrientation === 'landscape' ? 'landscape' : 'portrait',
     docxSavePages: Boolean(raw?.docxSavePages),
-    includePropertiesFolder: Boolean(raw?.includePropertiesFolder),
     selectedExtensions: selectedExtensions.length ? selectedExtensions : DEFAULT_SETTINGS.selectedExtensions
   };
 }
@@ -238,9 +236,8 @@ function getExt(path) {
   const dot = name.lastIndexOf('.');
   return dot >= 0 ? name.slice(dot) : '';
 }
-function isIgnoredPath(path, settings = DEFAULT_SETTINGS) {
+function isIgnoredPath(path) {
   const parts = normalizePath(path).split('/');
-  if (!settings.includePropertiesFolder && parts.some(part => part.toLowerCase() === 'properties')) return true;
   return parts.some(part => IGNORE_PARTS.has(part));
 }
 function shouldOutput(path, selectedExtensions = DEFAULT_EXTENSION_SET) {
@@ -789,9 +786,8 @@ function SettingsModal({ page, settings, mergeSettings, onChange, onMergeChange,
           <label className="setting-check"><input type="checkbox" checked={settings.docxSavePages} onChange={e => update({ docxSavePages: e.target.checked })}/><span>Save pages: do not start every code file on a new page</span></label>
         </div>
         <div className="settings-section">
-          <div className="settings-section-title"><h3>ZIP/RAR file types and folders</h3><button onClick={() => update({ selectedExtensions: DEFAULT_EXTENSION_SET, includePropertiesFolder: false })}>Reset defaults</button><button onClick={() => update({ selectedExtensions: Array.from(ALL_EXTENSION_SET) })}>Select all</button></div>
-          <p className="settings-note">These choices apply to the next ZIP/RAR files you upload. By default, the C# Properties folder is skipped.</p>
-          <label className="setting-check"><input type="checkbox" checked={settings.includePropertiesFolder} onChange={e => update({ includePropertiesFolder: e.target.checked })}/><span>Also extract files inside Properties folders</span></label>
+          <div className="settings-section-title"><h3>ZIP/RAR file types and folders</h3><button onClick={() => update({ selectedExtensions: DEFAULT_EXTENSION_SET })}>Reset defaults</button><button onClick={() => update({ selectedExtensions: Array.from(ALL_EXTENSION_SET) })}>Select all</button></div>
+          <p className="settings-note">These choices apply to the next ZIP/RAR files you upload.</p>
           <div className="extension-grid">
             {EXTENSION_OPTIONS.map(option => <label key={option.ext} className="extension-pill"><input type="checkbox" checked={selected.has(option.ext)} onChange={() => toggleExt(option.ext)}/><span>{option.label}</span></label>)}
           </div>
