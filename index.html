@@ -31,35 +31,30 @@
         const selection = window.getSelection ? window.getSelection() : null;
         if (!owners.length || !selection || selection.rangeCount === 0) return;
 
-        let touchesOwner = false;
-        const temp = document.createElement('div');
+        const marker = '\uE000';
+        const originals = owners.map(owner => owner.textContent || '');
 
-        for (let i = 0; i < selection.rangeCount; i++) {
-          const range = selection.getRangeAt(i);
-          if (owners.some(owner => {
-            try { return range.intersectsNode(owner); }
-            catch (_) { return false; }
-          })) {
-            touchesOwner = true;
+        try {
+          owners.forEach((owner, index) => {
+            owner.textContent = marker.repeat(originals[index].length || 1);
+          });
+
+          const markedText = String(selection.toString() || '').replace(/\u00a0/g, ' ');
+          if (!markedText.includes(marker)) return;
+
+          const withoutOwnerText = markedText.replace(new RegExp(marker, 'g'), '');
+
+          if (withoutOwnerText.trim().length > 0) {
+            event.clipboardData.setData('text/plain', withoutOwnerText);
+          } else {
+            event.clipboardData.setData('text/plain', '©');
           }
-          temp.appendChild(range.cloneContents());
+          event.preventDefault();
+        } finally {
+          owners.forEach((owner, index) => {
+            owner.textContent = originals[index];
+          });
         }
-
-        if (!touchesOwner) return;
-
-        const selectedText = String(selection.toString() || '').replace(/ /g, '');
-        const ownerText = owners[0] ? String(owners[0].textContent || '').replace(/ /g, '') : '';
-
-        temp.querySelectorAll('.owner-watermark').forEach(node => node.remove());
-        const remainingText = (temp.innerText || temp.textContent || '').replace(/ /g, '');
-        const hasOtherCopiedText = remainingText.trim().length > 0;
-
-        if (hasOtherCopiedText) {
-          event.clipboardData.setData('text/plain', remainingText);
-        } else {
-          event.clipboardData.setData('text/plain', selectedText === ownerText ? '©' : ' ');
-        }
-        event.preventDefault();
       });
     </script>
     <script type="module" src="/src/main.jsx"></script>
