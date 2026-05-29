@@ -47,11 +47,18 @@
 
         if (!touchesOwner) return;
 
+        const selectedText = String(selection.toString() || '').replace(/ /g, '');
+        const ownerText = owners[0] ? String(owners[0].textContent || '').replace(/ /g, '') : '';
+
         temp.querySelectorAll('.owner-watermark').forEach(node => node.remove());
         const remainingText = (temp.innerText || temp.textContent || '').replace(/ /g, '');
         const hasOtherCopiedText = remainingText.trim().length > 0;
 
-        event.clipboardData.setData('text/plain', hasOtherCopiedText ? remainingText : '©');
+        if (hasOtherCopiedText) {
+          event.clipboardData.setData('text/plain', remainingText);
+        } else {
+          event.clipboardData.setData('text/plain', selectedText === ownerText ? '©' : ' ');
+        }
         event.preventDefault();
       });
     </script>
