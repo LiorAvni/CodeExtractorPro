@@ -733,6 +733,7 @@ function GuidePanel({ open, onClose, kind }) {
           <li>לחץ על “Merge and download” כדי להוריד את הקובץ המאוחד.</li>
         </ol>
       </div>
+      <span className="owner-watermark" aria-hidden="true">Lior Avni 15/05/2026</span>
     </div> : <div className="guide-content">
       <h3>How to use CodeExtractor Pro</h3>
       <p>Use this page to turn project ZIP files into clean text for AI prompts, reviews, and documentation.</p>
@@ -756,6 +757,7 @@ function GuidePanel({ open, onClose, kind }) {
           <li>פתח Settings כדי לבחור הגדרות DOCX וסוגי קבצים שיופקו מה־ZIP/RAR בהעלאות הבאות.</li>
         </ol>
       </div>
+      <span className="owner-watermark" aria-hidden="true">Lior Avni 15/05/2026</span>
     </div>}
   </aside>;
 }

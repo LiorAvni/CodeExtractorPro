@@ -66,6 +66,7 @@ function GuidePanel({ open, onClose }) {
           <li>לחץ על “Merge and download” כדי להוריד את הקובץ המאוחד.</li>
         </ol>
       </div>
+      <span className="owner-watermark" aria-hidden="true">Lior Avni 15/05/2026</span>
     </div>
   </aside>;
 }
