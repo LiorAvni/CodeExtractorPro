@@ -19,6 +19,18 @@ import { Document, Packer, Paragraph, TextRun, PageOrientation, AlignmentType } 
 import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Copy, Download, FileCode2, FileText, Folder, FolderOpen, HelpCircle, Merge, Moon, Plus, Settings, Sun, Trash2, UploadCloud, X } from 'lucide-react';
 import './styles.css';
 import { Analytics } from '@vercel/analytics/react';
+import posthog from 'posthog-js';
+
+const POSTHOG_KEY = import.meta.env.VITE_POSTHOG_PROJECT_TOKEN;
+const POSTHOG_HOST = import.meta.env.VITE_POSTHOG_HOST || 'https://us.i.posthog.com';
+
+if (POSTHOG_KEY && typeof window !== 'undefined') {
+  posthog.init(POSTHOG_KEY, {
+    api_host: POSTHOG_HOST,
+    defaults: '2025-05-24',
+    person_profiles: 'identified_only',
+  });
+}
 
 hljs.registerLanguage('csharp', csharp);
 hljs.registerLanguage('javascript', javascript);

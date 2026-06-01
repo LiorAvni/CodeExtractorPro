@@ -18,6 +18,7 @@
     "lucide-react": "latest",
     "node-unrar-js": "latest",
     "pdf-lib": "^1.17.1",
+    "posthog-js": "latest",
     "react": "latest",
     "react-dom": "latest",
     "typescript": "latest",

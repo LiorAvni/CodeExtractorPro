@@ -5,6 +5,18 @@ import { PDFDocument } from 'pdf-lib';
 import { ArrowDown, ArrowLeft, ArrowUp, FileText, HelpCircle, Merge, Moon, Plus, Sun, Trash2, UploadCloud, X } from 'lucide-react';
 import './styles.css';
 import { Analytics } from '@vercel/analytics/react';
+import posthog from 'posthog-js';
+
+const POSTHOG_KEY = import.meta.env.VITE_POSTHOG_PROJECT_TOKEN;
+const POSTHOG_HOST = import.meta.env.VITE_POSTHOG_HOST || 'https://us.i.posthog.com';
+
+if (POSTHOG_KEY && typeof window !== 'undefined') {
+  posthog.init(POSTHOG_KEY, {
+    api_host: POSTHOG_HOST,
+    defaults: '2025-05-24',
+    person_profiles: 'identified_only',
+  });
+}
 
 const PDF_MIME = 'application/pdf';
 
